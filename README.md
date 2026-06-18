@@ -27,34 +27,33 @@ The steering is the headline. The SQLite log is a **byproduct** — you never ha
 
 ## Install
 
-```bash
-npm install -g reins      # or use `npx reins …` anywhere below
-```
-
-Requires Node ≥ 22.5 (you already have it — Claude Code runs on Node) and Claude Code ≥ 2.1.9.
+> **npm publish is pending.** `npm install -g reins` will be the one-liner once it lands. Until then, install from source — it takes ~20 seconds:
 
 ```bash
-cd your-project
-reins init                # creates .reins/ and prints the hooks block
+git clone https://github.com/manishkumar/reins
+cd reins
+npm install
+npm run build
+npm link          # puts `reins` on your PATH, pointing at this checkout
+reins version     # verify
 ```
 
-Paste the printed block into `.claude/settings.json` (it wires `PreToolUse`, `PostToolUse`, and `Stop` to `reins`):
-
-```json
-{
-  "hooks": {
-    "PreToolUse":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "reins hook pre-tool" }] }],
-    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "reins hook post-tool" }] }],
-    "Stop":        [{ "hooks": [{ "type": "command", "command": "reins hook stop" }] }]
-  }
-}
-```
-
-That's it. `.reins/` is self-gitignored.
+Requires **Node ≥ 18**. (Capture uses SQLite — built in on Node ≥ 22.5, optional on older Node; see [Compatibility](#compatibility). Steering and guards work on any Node ≥ 18.)
 
 ---
 
-## 60-second first run: steering
+## 60-second first run
+
+```bash
+cd your-project
+reins init          # creates .reins/ AND wires the hooks into .claude/settings.json
+```
+
+`reins init` now does the wiring for you — it merges the three hooks (`PreToolUse`, `PostToolUse`, `Stop`) into `.claude/settings.json` (creating it if needed, never clobbering existing settings). Then **restart Claude Code in this project** so it loads them.
+
+Prefer to paste it yourself? `reins init --print` prints the block instead. Want it in `settings.local.json` (not committed)? `reins init --local`.
+
+Now, the headline — **steering**:
 
 1. Kick off any real task in Claude Code (e.g. *"add token refresh to the auth module"*).
 2. While it's running, in another terminal:
@@ -65,18 +64,15 @@ That's it. `.reins/` is self-gitignored.
 
 3. At its **next tool call**, the agent picks up your note and course-corrects. The run never stopped; no context was lost.
 
-```
-$ reins steer "keep it minimal — one function, no new deps"
-✓ Steering queued.
-It reaches the agent at its next tool call — its next decision point — then
-clears (one-shot). The run keeps going; nothing is interrupted.
-```
+Not sure it's all hooked up? Run **`reins doctor`** — it checks your Node/capture capability, whether the hooks are wired, `.reins` writability, and pending steering.
 
 ### The two honest caveats (this is the product, read them)
 
-**1. Latency: next tool boundary, not "right now."** A `PreToolUse` hook only fires when the agent is *about to call a tool*. So steering lands at the agent's next decision point — typically seconds away, but not instantaneous. This is the correct async model (you can't babysit an agent keystroke-by-keystroke), and it's why the verbs are "steer" and "nudge," never "stop" or "interrupt."
+**1. Latency: next tool boundary, not "right now."** A `PreToolUse` hook only fires when the agent is *about to call a tool*. So steering lands at the agent's next decision point — usually seconds away, but not instantaneous. This is the correct async model (you can't babysit an agent keystroke-by-keystroke), and it's why the verbs are "steer" and "nudge," never "stop" or "interrupt."
 
-**2. Steering composes with the goal; it can't overwrite it.** Think of `reins steer` as **the detail you forgot to put in the original prompt** — added spec from the same author. *"focus on the token refresh path"*, *"keep it minimal"*, *"use the existing logger"*. It does **not** work as a hijack: a nudge that flatly contradicts the user's explicit instructions ("STOP, ignore everything, do X instead") is correctly treated by the model as suspicious and weighed down. Since the person typing `reins steer` is the same person who wrote the prompt, this is rarely a real constraint — just phrase steering as *more spec*, not *a reversal*. **If you need a hard "never do X," that's a guard, not steering.**
+**2. Steering composes with the goal; it can't overwrite it.** Think of `reins steer` as **the detail you forgot to put in the original prompt** — added spec from the same author. *"focus on the token refresh path"*, *"keep it minimal"*, *"use the existing logger"*. It does **not** work as a hijack: a nudge that flatly contradicts the user's explicit instructions ("STOP, ignore everything, do X instead") is correctly weighed down by the model. Since the person typing `reins steer` is the same person who wrote the prompt, this is rarely a real constraint — just phrase steering as *more spec*, not *a reversal*. **If you need a hard "never do X," that's a guard, not steering.**
+
+Two quick `reins steer`s before the next tool call **both** reach the agent (they append). Use `--replace` to overwrite, `reins steer --clear` to reset.
 
 ---
 
@@ -85,19 +81,24 @@ clears (one-shot). The run keeps going; nothing is interrupted.
 Guards turn a forbidden command or path into a wall. Mechanism: `PreToolUse` → `permissionDecision: "deny"`. The agent physically cannot proceed with that call — this holds **even under `--permission-mode bypassPermissions`**.
 
 ```bash
-reins guard list                              # see active rules
+reins guard list                              # see active rules + their ids
 reins guard add bash "psql.*production"       # block a command pattern (regex)
 reins guard add path "infra/**"               # block writes to paths (glob)
 reins guard add bash "docker .*--privileged" --reason "no privileged containers"
-reins guard remove <id>
+reins guard remove <id>                       # ids shown by `guard list`
 reins guard reset                             # back to defaults
 ```
 
-Ships with a sane default denylist (override freely): `rm -rf`, `git push --force`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env` / `.git/**`.
+Ships with a sane default denylist (override freely): `rm -rf`, `git push --force`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env*` / `.git/**`.
+
+**Path globs** match the full path *or any segment-aligned suffix*, so `infra/**` catches the absolute `file_path`s Claude Code sends (e.g. `/Users/you/proj/infra/main.tf`) and works with Windows backslashes too.
 
 ### What guards are — and are not
 
-Guards are **deterministic vetoes on recognized patterns**. They are excellent speed bumps against accidents and obvious footguns. They are **not a sandbox.** A pattern guard blocks a *form*, not an *intent*: an agent told to `rm -rf foo` and blocked may still delete `foo` via `find -exec rm`; blocked from a `.env` Write it may try a shell redirect (we block the common redirect forms too, but the cat-and-mouse is unwinnable in general). For true containment of an adversarial or determined agent, use OS-level sandboxing and real permission boundaries. `reins` guards are for *"don't let me/it footgun by accident,"* not *"contain a hostile process."*
+Guards are **deterministic vetoes on recognized patterns** — excellent speed bumps against accidents and obvious footguns, **not a sandbox.** Two honest limits:
+
+- **They block a *form*, not an *intent*.** Blocked from `rm -rf foo`, an agent may still delete via `find -exec rm`; blocked from a `.env` Write it may try a shell redirect (we block the common redirect forms too, but the cat-and-mouse is unwinnable in general). For containment of a determined/adversarial agent, use OS-level sandboxing and real permission boundaries.
+- **They match raw command text, so false positives happen.** `git commit -m "removed the rm -rf call"` will be blocked by the `rm -rf` guard, because the pattern appears in the message. If a guard is too aggressive for your workflow, `reins guard remove <id>` it or edit `.reins/guards.json` — they're fully yours.
 
 ---
 
@@ -113,9 +114,9 @@ Tune the threshold in `.reins/config.json` (`"loopThreshold"`).
 
 ---
 
-## Capture: `reins lastrun`
+## Capture: `reins lastrun`, `reins sessions`, `reins loops`
 
-The daily *"what the hell did it just do"* command. A clean, scannable account of the most recent run — like a `git diff` for agent behavior.
+The daily *"what the hell did it just do"* commands. A clean, scannable account of a run — like a `git diff` for agent behavior.
 
 ```
 $ reins lastrun
@@ -142,44 +143,98 @@ Summary
     ⟳ Bash ×3: npm test
 ```
 
-Inspect an older run with `reins lastrun <session-id-prefix>`.
+- `reins sessions` — list recent sessions in the project (status, call count, time). Handy when several agents have run in one repo.
+- `reins lastrun <session-prefix>` — inspect a specific older run.
+- `reins loops` — just the sessions where the agent got stuck.
 
 It's all in `.reins/runs.db` — three tables (`sessions`, `tool_calls`, `outcomes`) you can query with raw SQL whenever you want. Token/cost columns are best-effort (read from the session transcript) and may be null; that's harmless.
 
 ```sql
--- e.g. which runs ended after a guard block?
+-- which runs ended after a guard block?
 SELECT s.id, s.final_outcome, COUNT(*) AS blocked
 FROM tool_calls t JOIN sessions s ON s.id = t.session_id
 WHERE t.input_summary LIKE 'DENIED:%'
 GROUP BY s.id;
 ```
 
+Don't want any log at all? Set `REINS_NO_SQLITE=1` — capture is fully disabled and steering/guards keep working.
+
+---
+
+## Testing the hooks manually
+
+The hooks read the Claude Code event JSON on **stdin** and reply on stdout. You can exercise them by hand — useful for trying out a guard or steering rule without a live run:
+
+```bash
+# Will this command be blocked?
+echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf build"}}' | reins hook pre-tool
+# -> {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny",...}}
+
+# Does my queued steering inject?
+reins steer "keep it minimal"
+echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | reins hook pre-tool
+# -> {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"[reins …]"}}
+
+# Record a tool call (capture + loop detection):
+echo '{"session_id":"demo","tool_name":"Bash","tool_input":{"command":"npm test"},"tool_response":{}}' | reins hook post-tool
+```
+
+Useful fields per event: `session_id`, `cwd`, `tool_name`, `tool_input` (pre/post); `tool_response` (post); `transcript_path`, `reason` (stop). No output from a hook = "allow, inject nothing."
+
+---
+
+## Compatibility
+
+| | Steering & Guards | Capture (`lastrun`/`loops`/`sessions`) |
+|---|---|---|
+| **Node ≥ 22.5** | ✅ | ✅ via built-in `node:sqlite` |
+| **Node 18–22.4** | ✅ | ✅ *if* you `npm i -g better-sqlite3`, else disabled |
+| **`REINS_NO_SQLITE=1`** | ✅ | off by choice |
+
+The live reflexes never touch the database, so they work on **any Node ≥ 18**. Capture needs a synchronous SQLite backend: `node:sqlite` (built in on 22.5+) or the optional `better-sqlite3`. If neither is present, capture **degrades silently** — your agent is never affected — and `reins doctor` / `reins lastrun` tell you why. (Windows, macOS, Linux all supported; path guards normalize separators.)
+
 ---
 
 ## Local-first guarantee
 
-`reins` makes **zero network calls**. No telemetry, no phoning home, no account, ever. Your trajectories live in a SQLite file on your disk that you can read, query, back up, or delete. That privacy — and the raw-SQL hackability — is the entire point. The platform vendor will ship cost dashboards; they will not ship *"your agent's every move, in a DB only you can see."*
+`reins` makes **zero network calls**. No telemetry, no phoning home, no account, ever. Your trajectories live in a SQLite file on your disk that you can read, query, back up, or delete. That privacy — and the raw-SQL hackability — is the entire point.
 
 ---
 
 ## Security / threat model
 
-**`.reins/steering.txt` is security-sensitive: write access to it equals steering access.** Anything that can write that file can inject context into your running agent at its next tool call. It is project-local and git-ignored by default, which is the right posture — but be deliberate:
+**`.reins/steering.txt` is security-sensitive: write access to it equals steering access.** Anything that can write that file can inject context into your running agent at its next tool call. `reins` creates `.reins/` as `0700` (owner-only) and git-ignores it, but be deliberate:
 
 - **Do not let an untrusted or automated writer feed it.** A CI job, a shared script, or any process you don't fully control writing to `.reins/steering.txt` is a hijack path into your agent. Treat write access to that file as you'd treat write access to your prompts.
-- Steering is a **soft** channel by design — the model still weighs it and resists outright contradictions of your instructions — so this is defense-in-depth, not a sole control. But name the risk so nobody wires up an automated steerer by accident.
+- Steering is a **soft** channel — the model still weighs it and resists outright contradictions — so this is defense-in-depth, not a sole control. v1 ships no signing on the steering file; the mitigations are filesystem permissions (`0700`) and not pointing untrusted writers at it.
 
-v1 ships no signing or auth on the steering file; the mitigation is filesystem permissions and not pointing untrusted writers at it. If you need stronger guarantees, restrict permissions on `.reins/`.
-
-Guards, separately, are **not** a containment boundary (see *What guards are — and are not* above).
+Guards, separately, are **not** a containment boundary (see *What guards are — and are not*).
 
 A crashing hook **fails open** (the agent proceeds) so a bug in `reins` can never wedge your agent — which also means guards are best-effort if the hook itself errors.
 
 ---
 
+## Command reference
+
+```
+reins init [--print|--local]     Set up .reins/ and wire (or print) the hooks
+reins doctor                     Diagnose your setup
+reins steer "<msg>" [--replace]  Queue steering for the next tool call (appends)
+reins steer [--clear]            Show / clear pending steering
+reins guard list|add|remove|reset
+reins lastrun [session-prefix]   Readable account of a run
+reins sessions [-n N]            List recent sessions
+reins loops                      Sessions where the agent looped
+reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)
+```
+
 ## How it works (one breath)
 
-Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny) then steering (inject + clear). `post-tool` records the call and raises the loop alarm. `stop` finalizes the run. State lives in `.reins/`: `steering.txt`, `guards.json`, `config.json`, `runs.db`.
+Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny) then steering (inject + clear). `post-tool` records the call and raises the loop alarm. `stop` finalizes the run. State lives in `.reins/`: `steering.txt`, `guards.json`, `config.json`, `runs.db`. CLI commands find `.reins/` by walking up from your current directory, so they work from any subdirectory of the project.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Keep it small and sharp.
 
 ## License
 
