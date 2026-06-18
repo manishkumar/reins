@@ -21,10 +21,14 @@ export interface GuardsFile {
 // Fully overridable: `reins guard remove <id>` or edit .reins/guards.json.
 export const DEFAULT_RULES: GuardRule[] = [
   {
+    // Blocks RECURSIVE rm in any flag form — the dangerous part. Catches short
+    // combos (-rf, -fr, -Rf, -r) and the long form (--recursive), while leaving
+    // a single-file `rm -f x` / `rm --force x` alone. The (?<!-) stops the `r`
+    // inside `--force` from being read as a recursive short flag.
     id: "rm-rf",
     type: "bash",
-    pattern: "\\brm\\s+(-[a-zA-Z]*\\s+)*-?[a-zA-Z]*r[a-zA-Z]*f|\\brm\\s+-rf?\\b|\\brm\\s+-fr?\\b",
-    reason: "Recursive force-delete (rm -rf) is blocked by a reins guard.",
+    pattern: "\\brm\\b[^;&|]*?(?:(?<!-)-[a-z]*r[a-z]*\\b|--recursive\\b)",
+    reason: "Recursive rm (rm -rf / --recursive) is blocked by a reins guard.",
   },
   {
     id: "git-force-push",
@@ -161,6 +165,19 @@ export interface GuardMatch {
   rule: GuardRule;
 }
 
+/**
+ * Remove quoted string literals from a command before guard matching, so a
+ * pattern mentioned inside an ARGUMENT (e.g. `git commit -m "removed rm -rf"`,
+ * `echo "DROP TABLE"`) is not falsely blocked. Quoted text is data, not an
+ * executed command. The known trade-off — content inside `bash -c "…"` is also
+ * skipped — is consistent with guards being speed bumps, not a sandbox.
+ */
+export function stripQuoted(cmd: string): string {
+  return cmd
+    .replace(/"(?:[^"\\]|\\.)*"/g, " ")
+    .replace(/'[^']*'/g, " ");
+}
+
 /** Returns the first matching guard rule for a tool call, or null. */
 export function checkGuards(
   guards: GuardsFile,
@@ -179,7 +196,7 @@ export function checkGuards(
       } catch {
         continue; // skip malformed user regex rather than crash the guard
       }
-      if (re.test(command)) return { rule };
+      if (re.test(stripQuoted(command))) return { rule };
     } else if (rule.type === "path") {
       const paths = pathsFromInput(input);
       if (paths.length === 0) continue;

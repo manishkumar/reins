@@ -45,6 +45,43 @@ test("checkGuards: bash rm -rf is denied, safe command is not", () => {
   assert.strictEqual(guards.checkGuards(g, "Bash", { command: "npm run format" }), null);
 });
 
+test("checkGuards: rm recursive long-flags are caught (Dana's bypass)", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  for (const cmd of [
+    "rm --recursive --force x",
+    "rm --force --recursive x",
+    "rm --force -r x",
+    "rm -R dir",
+    "rm --recursive dir",
+  ]) {
+    assert.ok(guards.checkGuards(g, "Bash", { command: cmd }), `should block: ${cmd}`);
+  }
+});
+
+test("checkGuards: single-file rm is NOT blocked (no false positive)", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  for (const cmd of ["rm file.txt", "rm -f file.txt", "rm --force file.txt", "rm -i x", "rm -v x"]) {
+    assert.strictEqual(guards.checkGuards(g, "Bash", { command: cmd }), null, `should allow: ${cmd}`);
+  }
+});
+
+test("checkGuards: pattern inside a quoted arg is not falsely blocked", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  // The classic ticket-generators — pattern appears only inside a string arg.
+  assert.strictEqual(
+    guards.checkGuards(g, "Bash", { command: 'git commit -m "removed the rm -rf call"' }),
+    null,
+  );
+  assert.strictEqual(guards.checkGuards(g, "Bash", { command: 'echo "DROP TABLE users"' }), null);
+  // But a real recursive rm with a quoted PATH is still blocked.
+  assert.ok(guards.checkGuards(g, "Bash", { command: 'rm -rf "my build dir"' }));
+});
+
+test("stripQuoted: removes quoted literals, keeps the rest", () => {
+  assert.strictEqual(guards.stripQuoted('git commit -m "rm -rf"').includes("rm -rf"), false);
+  assert.ok(guards.stripQuoted('rm -rf "a b"').includes("rm -rf"));
+});
+
 test("checkGuards: path rule only applies to file tools, not bash", () => {
   const g = { rules: guards.DEFAULT_RULES };
   assert.ok(guards.checkGuards(g, "Write", { file_path: "/proj/.env" }));
