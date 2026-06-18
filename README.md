@@ -181,6 +181,8 @@ echo '{"session_id":"demo","tool_name":"Bash","tool_input":{"command":"npm test"
 
 Useful fields per event: `session_id`, `cwd`, `tool_name`, `tool_input` (pre/post); `tool_response` (post); `transcript_path`, `reason` (stop). No output from a hook = "allow, inject nothing."
 
+Two notes for manual testing: events **without** a `session_id` don't get recorded (so quick guard/steer checks won't litter your trajectory log); and a session you record by hand will show as "still running" in `reins lastrun` until you also send a `stop` event for it.
+
 ---
 
 ## Compatibility

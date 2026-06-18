@@ -10,7 +10,7 @@ import { emitPostToolContext } from "../hookio";
 export async function runPostTool(): Promise<void> {
   const payload = await readStdinJson();
   const cwd = (payload.cwd as string) || undefined;
-  const sessionId = (payload.session_id as string) || "unknown";
+  const sessionId = (payload.session_id as string) || "";
   const toolName = (payload.tool_name as string) || "";
   const toolInput = payload.tool_input ?? {};
   const toolResponse = payload.tool_response;
@@ -27,7 +27,7 @@ export async function runPostTool(): Promise<void> {
       insertToolCall,
       countSameHash,
     } = require("../db") as typeof import("../db");
-    const db = openDb(cwd);
+    const db = sessionId ? openDb(cwd) : null; // no real session => don't record
     if (db) {
     upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
     insertToolCall(db, {

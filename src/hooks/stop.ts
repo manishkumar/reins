@@ -9,7 +9,8 @@ import { readTranscriptTotals } from "../transcript";
 export async function runStop(): Promise<void> {
   const payload = await readStdinJson();
   const cwd = (payload.cwd as string) || undefined;
-  const sessionId = (payload.session_id as string) || "unknown";
+  const sessionId = (payload.session_id as string) || "";
+  if (!sessionId) return; // manual/test invocation — nothing to finalize
   const transcriptPath = payload.transcript_path as string | undefined;
   const outcome =
     (payload.reason as string) ||

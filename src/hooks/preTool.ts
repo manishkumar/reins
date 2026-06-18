@@ -14,7 +14,10 @@ import { emitDeny, emitPreToolContext } from "../hookio";
 export async function runPreTool(): Promise<void> {
   const payload = await readStdinJson();
   const cwd = (payload.cwd as string) || undefined;
-  const sessionId = (payload.session_id as string) || "unknown";
+  // Real Claude Code events always carry a session_id. Its absence means a
+  // manual/test invocation — guard + steer still run, but we don't record a
+  // phantom "unknown" session into the trajectory log.
+  const sessionId = (payload.session_id as string) || "";
   const toolName = (payload.tool_name as string) || "";
   const toolInput = payload.tool_input ?? {};
 
@@ -52,6 +55,7 @@ function recordDenied(
   toolName: string,
   toolInput: unknown,
 ): void {
+  if (!sessionId) return; // manual/test invocation — don't pollute the log
   try {
     const {
       openDb,
