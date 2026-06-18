@@ -14,6 +14,8 @@ All notable changes to `reins` are documented here. Format loosely follows
 - `reins doctor` — diagnoses Node/capture capability, hook wiring, `.reins`
   writability, and pending steering.
 - `reins sessions` (alias `ls`) — list recent sessions in the project.
+- `reins uninstall [--purge]` — cleanly remove the hooks (and optionally the
+  `.reins/` data), the counterpart to `init`'s auto-wiring.
 - Cross-Node compatibility: works on Node ≥ 18; capture via `node:sqlite`
   (≥22.5) or optional `better-sqlite3`, degrading silently otherwise.
 - `REINS_NO_SQLITE` to disable the trajectory log entirely.

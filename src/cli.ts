@@ -42,6 +42,10 @@ async function main(): Promise<number> {
       const { cmdDoctor } = await import("./commands/doctor");
       return cmdDoctor();
     }
+    case "uninstall": {
+      const { cmdUninstall } = await import("./commands/uninstall");
+      return cmdUninstall(rest);
+    }
     case "version":
     case "--version":
     case "-v": {
@@ -106,6 +110,7 @@ USAGE
   reins init --print               Print the hooks block instead of writing it
   reins init --local               Wire into .claude/settings.local.json
   reins doctor                     Diagnose your setup when something's off
+  reins uninstall [--purge]        Remove reins hooks (--purge also drops .reins)
   reins steer "<message>"          Queue live steering for the next tool call
   reins steer "<message>" --replace  Overwrite pending steering (default: append)
   reins steer                      Show pending steering

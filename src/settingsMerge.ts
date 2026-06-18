@@ -44,3 +44,35 @@ export function mergeReinsHooks(input: Record<string, unknown> | null | undefine
   settings.hooks = hooks;
   return { settings, added };
 }
+
+export interface UnmergeOutcome {
+  settings: Record<string, unknown>;
+  /** How many reins hook entries were removed. */
+  removed: number;
+}
+
+/**
+ * Remove reins hook entries from a parsed settings object, leaving any other
+ * hooks (and all other keys) intact. Empty hook arrays/objects are pruned so
+ * the file stays tidy. Pure function — easy to test.
+ */
+export function unmergeReinsHooks(input: Record<string, unknown> | null | undefined): UnmergeOutcome {
+  const settings: Record<string, unknown> = { ...(input ?? {}) };
+  const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
+  let removed = 0;
+
+  for (const event of Object.keys(hooks)) {
+    const entries = Array.isArray(hooks[event]) ? hooks[event] : [];
+    const kept = entries.filter((e) => {
+      const isReins = (e.hooks ?? []).some((h) => (h.command ?? "").includes("reins hook"));
+      if (isReins) removed++;
+      return !isReins;
+    });
+    if (kept.length === 0) delete hooks[event];
+    else hooks[event] = kept;
+  }
+
+  if (Object.keys(hooks).length === 0) delete settings.hooks;
+  else settings.hooks = hooks;
+  return { settings, removed };
+}

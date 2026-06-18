@@ -220,6 +220,7 @@ A crashing hook **fails open** (the agent proceeds) so a bug in `reins` can neve
 
 ```
 reins init [--print|--local]     Set up .reins/ and wire (or print) the hooks
+reins uninstall [--purge]        Remove the hooks (--purge also drops .reins/)
 reins doctor                     Diagnose your setup
 reins steer "<msg>" [--replace]  Queue steering for the next tool call (appends)
 reins steer [--clear]            Show / clear pending steering

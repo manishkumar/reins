@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert");
 
-const { mergeReinsHooks } = require("../dist/settingsMerge.js");
+const { mergeReinsHooks, unmergeReinsHooks } = require("../dist/settingsMerge.js");
 
 test("mergeReinsHooks: adds all three hooks to empty settings", () => {
   const { settings, added } = mergeReinsHooks({});
@@ -47,4 +47,27 @@ test("mergeReinsHooks: does not mutate the input object", () => {
   const input = { hooks: {} };
   mergeReinsHooks(input);
   assert.deepStrictEqual(input, { hooks: {} });
+});
+
+test("unmergeReinsHooks: round-trips merge back to clean state", () => {
+  const { settings } = mergeReinsHooks({ model: "x" });
+  const { settings: cleaned, removed } = unmergeReinsHooks(settings);
+  assert.strictEqual(removed, 3);
+  assert.strictEqual(cleaned.model, "x");
+  assert.strictEqual(cleaned.hooks, undefined); // pruned empty
+});
+
+test("unmergeReinsHooks: keeps the user's own hooks, removes only reins", () => {
+  const input = {
+    hooks: {
+      PreToolUse: [
+        { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] },
+        { matcher: "*", hooks: [{ type: "command", command: "reins hook pre-tool" }] },
+      ],
+    },
+  };
+  const { settings, removed } = unmergeReinsHooks(input);
+  assert.strictEqual(removed, 1);
+  assert.strictEqual(settings.hooks.PreToolUse.length, 1);
+  assert.strictEqual(settings.hooks.PreToolUse[0].hooks[0].command, "my-hook");
 });
