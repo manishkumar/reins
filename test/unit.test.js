@@ -17,6 +17,26 @@ test("globToRegExp: ** crosses separators, * does not", () => {
   assert.ok(guards.globToRegExp("*.pem").test("key.pem"));
 });
 
+test("matchesPathGlob: matches ABSOLUTE paths (Marcus's infra/** bug)", () => {
+  const infra = guards.globToRegExp("infra/**");
+  assert.ok(guards.matchesPathGlob(infra, "infra/main.tf"));
+  assert.ok(guards.matchesPathGlob(infra, "/Users/x/proj/infra/main.tf")); // was silently allowed
+  assert.ok(!guards.matchesPathGlob(infra, "/Users/x/proj/src/main.tf"));
+});
+
+test("matchesPathGlob: .env* family, but not lookalikes", () => {
+  const env = guards.globToRegExp("**/.env*");
+  assert.ok(guards.matchesPathGlob(env, "/p/.env"));
+  assert.ok(guards.matchesPathGlob(env, "/p/.env.local")); // the real secret files
+  assert.ok(guards.matchesPathGlob(env, "/p/.env.production"));
+  assert.ok(!guards.matchesPathGlob(env, "/p/server.env.log")); // must NOT false-positive
+});
+
+test("matchesPathGlob: Windows backslash separators are normalized", () => {
+  const git = guards.globToRegExp("**/.git/**");
+  assert.ok(guards.matchesPathGlob(git, "C:\\proj\\.git\\config"));
+});
+
 test("checkGuards: bash rm -rf is denied, safe command is not", () => {
   const g = { rules: guards.DEFAULT_RULES };
   assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf build" }));

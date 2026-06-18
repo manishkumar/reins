@@ -3,18 +3,10 @@ import * as path from "node:path";
 import { ensureReinsDir, guardsPath, configPath } from "../paths";
 import { loadGuards, saveGuards } from "../guards";
 import { loadConfig, saveConfig } from "../config";
-import { SETTINGS_BLOCK, settingsBlockJson } from "../settingsBlock";
+import { settingsBlockJson } from "../settingsBlock";
+import { mergeReinsHooks } from "../settingsMerge";
 import { getDriver, capabilityNote } from "../store";
 import { c } from "./format";
-
-interface HookCmd {
-  type: string;
-  command: string;
-}
-interface HookEntry {
-  matcher?: string;
-  hooks: HookCmd[];
-}
 
 export function cmdInit(args: string[]): number {
   const printOnly = args.includes("--print") || args.includes("-p");
@@ -84,12 +76,12 @@ interface MergeResult {
  * user's settings on a stray syntax error).
  */
 function mergeHooks(settingsFile: string): MergeResult {
-  let settings: Record<string, unknown> = {};
+  let parsed: Record<string, unknown> = {};
   if (fs.existsSync(settingsFile)) {
     const raw = fs.readFileSync(settingsFile, "utf8").trim();
     if (raw) {
       try {
-        settings = JSON.parse(raw);
+        parsed = JSON.parse(raw);
       } catch {
         return { status: "unparseable", detail: "" };
       }
@@ -98,29 +90,14 @@ function mergeHooks(settingsFile: string): MergeResult {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   }
 
-  const hooks = (settings.hooks ?? {}) as Record<string, HookEntry[]>;
-  let added = 0;
-
-  for (const [event, desired] of Object.entries(SETTINGS_BLOCK.hooks)) {
-    const existing = Array.isArray(hooks[event]) ? hooks[event] : [];
-    for (const wantEntry of desired as HookEntry[]) {
-      const wantCmd = wantEntry.hooks[0].command;
-      const present = existing.some((e) =>
-        (e.hooks ?? []).some((h) => h.command === wantCmd),
-      );
-      if (!present) {
-        existing.push(wantEntry);
-        added++;
-      }
-    }
-    hooks[event] = existing;
-  }
-
+  const { settings, added } = mergeReinsHooks(parsed);
   if (added === 0) return { status: "already", detail: "" };
 
-  settings.hooks = hooks;
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
-  return { status: "added", detail: `${added} hook${added === 1 ? "" : "s"} added (PreToolUse, PostToolUse, Stop).` };
+  return {
+    status: "added",
+    detail: `${added} hook${added === 1 ? "" : "s"} added (PreToolUse, PostToolUse, Stop).`,
+  };
 }
 
 function rel(p: string): string {

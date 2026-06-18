@@ -51,18 +51,19 @@ export const DEFAULT_RULES: GuardRule[] = [
     reason: "Piping a downloaded script straight into a shell is blocked by a reins guard.",
   },
   {
+    // Covers the whole secret family: .env, .env.local, .env.production, etc.
     id: "write-dotenv",
     type: "path",
-    pattern: "**/.env",
-    reason: "Writing to .env is blocked by a reins guard (secrets).",
+    pattern: "**/.env*",
+    reason: "Writing to a .env file is blocked by a reins guard (secrets).",
   },
   {
-    // Close the obvious bypass of write-dotenv: a shell redirect/copy into .env.
-    // Pattern guards are speed bumps, not a sandbox — see README limitations.
+    // Close the obvious bypass of write-dotenv: a shell redirect/copy into a
+    // .env file. Pattern guards are speed bumps, not a sandbox — see README.
     id: "write-dotenv-bash",
     type: "bash",
-    pattern: "(>>?|\\btee\\b|\\bcp\\b|\\bmv\\b)\\s*[^|;&]*\\.env(\\s|$|\"|')",
-    reason: "Writing to .env via the shell is blocked by a reins guard (secrets).",
+    pattern: "(>>?|\\btee\\b|\\bcp\\b|\\bmv\\b)\\s*[^|;&]*\\.env(\\.[\\w.-]+)?(\\s|$|\"|')",
+    reason: "Writing to a .env file via the shell is blocked by a reins guard (secrets).",
   },
   {
     id: "touch-git-internals",
@@ -89,16 +90,31 @@ export function saveGuards(guards: GuardsFile, payloadCwd?: string): void {
   fs.writeFileSync(guardsPath(payloadCwd), JSON.stringify(guards, null, 2) + "\n");
 }
 
-/** Translate a minimal glob (`*`, `**`, `?`) into an anchored RegExp. */
+// Translate a minimal glob into a fully-anchored RegExp.
+//   `*` and `?`         match within a single path segment (never cross "/").
+//   `**`                crosses separators.
+//   a "globstar slash"  (two stars then a slash) means zero or more WHOLE
+//                       leading segments, compiled to `(?:.*/)?`.
+//
+// The result is anchored ^...$ and is meant to be tested against a path AND
+// each of its segment-aligned suffixes (see matchesPathGlob). That combination
+// makes `infra/**` catch the ABSOLUTE paths Claude Code actually sends
+// (e.g. /Users/x/proj/infra/main.tf) while keeping a `.env*` rule from falsely
+// matching `server.env.log`. A path guard that silently never fires is the
+// worst failure mode for a safety feature (false security), so this matters.
 export function globToRegExp(glob: string): RegExp {
   let re = "";
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
     if (c === "*") {
       if (glob[i + 1] === "*") {
-        re += ".*"; // ** matches across path separators
-        i++;
-        if (glob[i + 1] === "/") i++; // collapse **/ so it can match zero dirs
+        i++; // consume the second '*'
+        if (glob[i + 1] === "/") {
+          re += "(?:.*/)?"; // **/ => zero or more whole leading segments
+          i++;
+        } else {
+          re += ".*"; // trailing ** (or **suffix) crosses separators
+        }
       } else {
         re += "[^/]*";
       }
@@ -109,6 +125,26 @@ export function globToRegExp(glob: string): RegExp {
     }
   }
   return new RegExp("^" + re + "$");
+}
+
+/** Normalize a path for matching: Windows backslashes -> forward slashes. */
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+/** Segment-aligned suffixes of a path: "a/b/c" -> ["a/b/c","b/c","c"]. */
+function pathSuffixes(p: string): string[] {
+  const out = [p];
+  for (let i = 0; i < p.length; i++) {
+    if (p[i] === "/" && i + 1 < p.length) out.push(p.slice(i + 1));
+  }
+  return out;
+}
+
+/** True if a path glob matches the (normalized) path or any of its suffixes. */
+export function matchesPathGlob(re: RegExp, rawPath: string): boolean {
+  const norm = normalizePath(rawPath);
+  return pathSuffixes(norm).some((s) => re.test(s));
 }
 
 /** Collect file-path-like fields from a tool input. */
@@ -154,9 +190,9 @@ export function checkGuards(
         continue;
       }
       for (const p of paths) {
-        // Match against both the raw path and its basename-bearing form so a
-        // glob like **/.env catches absolute, relative, and bare paths.
-        if (re.test(p) || re.test("/" + p)) return { rule };
+        // Match against the path and every segment-aligned suffix, so a rule
+        // like `infra/**` catches absolute paths and works on Windows too.
+        if (matchesPathGlob(re, p)) return { rule };
       }
     }
   }
