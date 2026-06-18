@@ -29,6 +29,11 @@ async function main(): Promise<number> {
       const { cmdLoops } = await import("./commands/loops");
       return cmdLoops();
     }
+    case "sessions":
+    case "ls": {
+      const { cmdSessions } = await import("./commands/sessions");
+      return cmdSessions(rest);
+    }
     case "init": {
       const { cmdInit } = await import("./commands/init");
       return cmdInit(rest);
@@ -102,6 +107,7 @@ USAGE
   reins init --local               Wire into .claude/settings.local.json
   reins doctor                     Diagnose your setup when something's off
   reins steer "<message>"          Queue live steering for the next tool call
+  reins steer "<message>" --replace  Overwrite pending steering (default: append)
   reins steer                      Show pending steering
   reins steer --clear              Clear pending steering
   reins guard list                 Show guard rules (hard vetoes)
@@ -110,6 +116,7 @@ USAGE
   reins guard remove <id>          Remove a guard
   reins guard reset                Restore default guards
   reins lastrun [session-prefix]   Readable account of the most recent run
+  reins sessions                   List recent sessions in this project
   reins loops                      Sessions where the agent looped
 
 HOOK ENTRYPOINTS (wired via .claude/settings.json — see \`reins init\`)

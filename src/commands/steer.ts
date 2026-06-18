@@ -1,4 +1,4 @@
-import { writeSteering, peekSteering, clearSteering } from "../steering";
+import { writeSteering, appendSteering, peekSteering, clearSteering } from "../steering";
 import { c } from "./format";
 
 export function cmdSteer(args: string[]): number {
@@ -8,7 +8,8 @@ export function cmdSteer(args: string[]): number {
     return 0;
   }
 
-  const message = args.join(" ").trim();
+  const replace = args.includes("--replace");
+  const message = args.filter((a) => a !== "--replace").join(" ").trim();
 
   if (!message) {
     const pending = peekSteering();
@@ -24,8 +25,16 @@ export function cmdSteer(args: string[]): number {
     return 0;
   }
 
-  writeSteering(message);
-  console.log(c.green("✓ Steering queued."));
+  const hadPending = peekSteering() !== null;
+  if (replace || !hadPending) {
+    writeSteering(message);
+    console.log(c.green("✓ Steering queued."));
+  } else {
+    // Don't silently drop the earlier nudge — combine them.
+    const count = appendSteering(message);
+    console.log(c.green(`✓ Added to pending steering (${count} nudges queued).`));
+    console.log(c.dim("  Use --replace to overwrite instead, or `reins steer --clear` to reset."));
+  }
   console.log(
     c.dim(
       "It reaches the agent at its next tool call — its next decision point — " +

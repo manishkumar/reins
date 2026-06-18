@@ -1,10 +1,26 @@
 import * as fs from "node:fs";
 import { steeringPath, ensureReinsDir } from "./paths";
 
-/** Queue a steering message for the next tool boundary. Latest write wins. */
+/** Queue a steering message for the next tool boundary, replacing any pending. */
 export function writeSteering(message: string, payloadCwd?: string): void {
   ensureReinsDir(payloadCwd);
   fs.writeFileSync(steeringPath(payloadCwd), message.trim() + "\n");
+}
+
+/**
+ * Append a nudge to any pending steering instead of clobbering it. Two quick
+ * `reins steer` calls before the next tool boundary should both reach the
+ * agent, not silently drop the first. Returns the number of nudges now queued.
+ */
+export function appendSteering(message: string, payloadCwd?: string): number {
+  const existing = peekSteering(payloadCwd);
+  if (!existing) {
+    writeSteering(message, payloadCwd);
+    return 1;
+  }
+  const combined = existing + "\n" + message.trim();
+  fs.writeFileSync(steeringPath(payloadCwd), combined + "\n");
+  return combined.split("\n").filter((l) => l.trim()).length;
 }
 
 /** Return the pending steering message without consuming it (for `reins steer`). */
