@@ -1,19 +1,5 @@
-// node:sqlite is experimental and emits a process warning on first use. Hooks
-// must keep stderr clean (it surfaces to the user/agent), so suppress that one
-// specific warning before the module is loaded.
-const _origEmitWarning = process.emitWarning.bind(process);
-(process as unknown as { emitWarning: typeof process.emitWarning }).emitWarning =
-  ((warning: string | Error, ...rest: unknown[]) => {
-    const type =
-      typeof rest[0] === "string"
-        ? rest[0]
-        : (rest[0] as { type?: string } | undefined)?.type;
-    if (type === "ExperimentalWarning" && String(warning).includes("SQLite")) return;
-    return (_origEmitWarning as (...a: unknown[]) => void)(warning, ...rest);
-  }) as typeof process.emitWarning;
-
-import { DatabaseSync } from "node:sqlite";
 import { ensureReinsDir, dbPath } from "./paths";
+import { getDriver, SqlDb } from "./store";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -43,32 +29,40 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, seq)
 CREATE INDEX IF NOT EXISTS idx_tool_calls_hash ON tool_calls(session_id, input_hash);
 `;
 
-let _db: DatabaseSync | null = null;
+let _db: SqlDb | null = null;
 
-/** Open (creating if needed) the project's runs.db with schema applied. */
-export function openDb(payloadCwd?: string): DatabaseSync {
+/**
+ * Open (creating if needed) the project's runs.db with schema applied.
+ * Returns null if no SQLite backend is available on this Node — callers must
+ * treat capture as best-effort and skip silently (the live reflexes don't need
+ * the DB).
+ */
+export function openDb(payloadCwd?: string): SqlDb | null {
   if (_db) return _db;
+  const driver = getDriver();
+  if (!driver) return null;
   ensureReinsDir(payloadCwd);
-  const db = new DatabaseSync(dbPath(payloadCwd));
+  const db = driver.open(dbPath(payloadCwd));
   db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA busy_timeout = 2000;");
+  db.exec("PRAGMA busy_timeout = 4000;");
   db.exec(SCHEMA);
   _db = db;
   return db;
 }
 
-/** Open read-only for query commands; returns null if no db exists yet. */
-export function openDbReadOnly(payloadCwd?: string): DatabaseSync | null {
+/** Open read-only for query commands; null if no backend or no db file yet. */
+export function openDbReadOnly(payloadCwd?: string): SqlDb | null {
+  const driver = getDriver();
+  if (!driver) return null;
   const fs = require("node:fs") as typeof import("node:fs");
   const p = dbPath(payloadCwd);
   if (!fs.existsSync(p)) return null;
-  const db = new DatabaseSync(p, { readOnly: true });
-  return db;
+  return driver.open(p, { readOnly: true });
 }
 
 /** Insert the session row if it does not exist yet (first tool call / stop). */
 export function upsertSessionStart(
-  db: DatabaseSync,
+  db: SqlDb,
   sessionId: string,
   repo: string,
   startedIso: string,
@@ -79,7 +73,7 @@ export function upsertSessionStart(
   ).run(sessionId, repo, startedIso);
 }
 
-export function nextSeq(db: DatabaseSync, sessionId: string): number {
+export function nextSeq(db: SqlDb, sessionId: string): number {
   const row = db
     .prepare(`SELECT COALESCE(MAX(seq), 0) AS m FROM tool_calls WHERE session_id = ?`)
     .get(sessionId) as { m: number } | undefined;
@@ -96,7 +90,7 @@ export interface ToolCallRow {
   ts: string;
 }
 
-export function insertToolCall(db: DatabaseSync, row: ToolCallRow): void {
+export function insertToolCall(db: SqlDb, row: ToolCallRow): void {
   db.prepare(
     `INSERT INTO tool_calls (session_id, seq, tool, input_summary, input_hash, ok, ts)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -112,11 +106,7 @@ export function insertToolCall(db: DatabaseSync, row: ToolCallRow): void {
 }
 
 /** How many times this exact (tool,input_hash) has run in the session so far. */
-export function countSameHash(
-  db: DatabaseSync,
-  sessionId: string,
-  inputHash: string,
-): number {
+export function countSameHash(db: SqlDb, sessionId: string, inputHash: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS c FROM tool_calls WHERE session_id = ? AND input_hash = ?`,
@@ -126,7 +116,7 @@ export function countSameHash(
 }
 
 export function finalizeSession(
-  db: DatabaseSync,
+  db: SqlDb,
   sessionId: string,
   endedIso: string,
   outcome: string,
@@ -143,7 +133,7 @@ export function finalizeSession(
 }
 
 export function insertOutcome(
-  db: DatabaseSync,
+  db: SqlDb,
   sessionId: string,
   stopReason: string,
   gateResult: string | null,

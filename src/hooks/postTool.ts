@@ -29,6 +29,7 @@ export async function runPostTool(): Promise<void> {
       countSameHash,
     } = require("../db") as typeof import("../db");
     const db = openDb(cwd);
+    if (db) {
     upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
     insertToolCall(db, {
       session_id: sessionId,
@@ -40,6 +41,7 @@ export async function runPostTool(): Promise<void> {
       ts: nowIso(),
     });
     repeatCount = countSameHash(db, sessionId, inputHash);
+    }
   } catch (e) {
     process.stderr.write("[reins] capture (post) failed: " + String(e) + "\n");
   }

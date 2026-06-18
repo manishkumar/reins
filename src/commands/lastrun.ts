@@ -1,4 +1,5 @@
 import { openDbReadOnly } from "../db";
+import { capabilityNote } from "../store";
 import { c } from "./format";
 import { truncate } from "../util";
 import { loadConfig } from "../config";
@@ -24,7 +25,8 @@ interface CallRow {
 export function cmdLastrun(args: string[]): number {
   const db = openDbReadOnly();
   if (!db) {
-    console.log(c.dim("No runs recorded yet (.reins/runs.db doesn't exist)."));
+    const note = capabilityNote();
+    console.log(c.dim(note || "No runs recorded yet (.reins/runs.db doesn't exist)."));
     return 0;
   }
 

@@ -60,6 +60,7 @@ function recordDenied(
       insertToolCall,
     } = require("../db") as typeof import("../db");
     const db = openDb(cwd);
+    if (!db) return; // no SQLite backend — capture disabled, decision already made
     upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
     insertToolCall(db, {
       session_id: sessionId,

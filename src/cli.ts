@@ -31,13 +31,24 @@ async function main(): Promise<number> {
     }
     case "init": {
       const { cmdInit } = await import("./commands/init");
-      return cmdInit();
+      return cmdInit(rest);
+    }
+    case "doctor": {
+      const { cmdDoctor } = await import("./commands/doctor");
+      return cmdDoctor();
     }
     case "version":
     case "--version":
-    case "-v":
-      console.log(require("../package.json").version);
+    case "-v": {
+      let v = "unknown";
+      try {
+        v = (require("../package.json") as { version: string }).version;
+      } catch {
+        /* keep unknown */
+      }
+      console.log(v);
       return 0;
+    }
     case undefined:
     case "help":
     case "--help":
@@ -86,7 +97,10 @@ function printHelp(): void {
 catch loops, and capture every run. Local-first. No daemon, no backend.
 
 USAGE
-  reins init                       Set up .reins/ and print the hooks block
+  reins init                       Set up .reins/ and wire hooks into settings
+  reins init --print               Print the hooks block instead of writing it
+  reins init --local               Wire into .claude/settings.local.json
+  reins doctor                     Diagnose your setup when something's off
   reins steer "<message>"          Queue live steering for the next tool call
   reins steer                      Show pending steering
   reins steer --clear              Clear pending steering

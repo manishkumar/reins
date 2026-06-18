@@ -24,6 +24,7 @@ export async function runStop(): Promise<void> {
       insertOutcome,
     } = require("../db") as typeof import("../db");
     const db = openDb(cwd);
+    if (!db) return; // no SQLite backend — nothing to finalize
     upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
 
     const totals = readTranscriptTotals(transcriptPath);

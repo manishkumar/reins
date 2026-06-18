@@ -1,4 +1,5 @@
 import { openDbReadOnly } from "../db";
+import { capabilityNote } from "../store";
 import { loadConfig } from "../config";
 import { c } from "./format";
 import { truncate } from "../util";
@@ -14,7 +15,8 @@ interface LoopRow {
 export function cmdLoops(): number {
   const db = openDbReadOnly();
   if (!db) {
-    console.log(c.dim("No runs recorded yet (.reins/runs.db doesn't exist)."));
+    const note = capabilityNote();
+    console.log(c.dim(note || "No runs recorded yet (.reins/runs.db doesn't exist)."));
     return 0;
   }
   const threshold = loadConfig().loopThreshold;
