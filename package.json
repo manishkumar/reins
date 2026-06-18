@@ -1,0 +1,39 @@
+{
+  "name": "reins",
+  "version": "0.1.0",
+  "description": "A local-first kit of Claude Code hooks: steer a running agent mid-flight, hard-block forbidden actions, get warned when it loops, and capture every run's trajectory to a queryable SQLite file. No daemon, no backend, no account.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "hooks",
+    "agent",
+    "steering",
+    "guardrails",
+    "observability",
+    "sqlite",
+    "local-first"
+  ],
+  "license": "MIT",
+  "author": "",
+  "type": "commonjs",
+  "bin": {
+    "reins": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/cli.js', 0o755)\"",
+    "prepublishOnly": "npm run build",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
