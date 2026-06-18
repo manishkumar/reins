@@ -70,7 +70,7 @@ function printHeader(s: SessionRow, callCount: number): void {
   const outcome = s.final_outcome ?? (s.ended ? "ended" : c.yellow("still running / not stopped"));
   console.log(`  ${c.dim("outcome")}  ${outcome}`);
   const meta: string[] = [`${callCount} tool calls`];
-  if (s.total_tokens != null) meta.push(`${s.total_tokens.toLocaleString()} tokens`);
+  if (s.total_tokens != null) meta.push(`${groupThousands(s.total_tokens)} tokens`);
   if (s.total_cost != null) meta.push(`$${s.total_cost.toFixed(4)}`);
   console.log(`  ${c.dim("totals")}   ${meta.join(c.dim(" · "))}`);
 }
@@ -155,6 +155,11 @@ function toolGlyph(tool: string): string {
     default:
       return "•";
   }
+}
+
+/** Stable thousands grouping (avoids locale-specific output like "1,83,007"). */
+function groupThousands(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 function duration(start: string | null, end: string | null): string {
