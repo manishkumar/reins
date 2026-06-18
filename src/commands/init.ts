@@ -12,9 +12,12 @@ export function cmdInit(args: string[]): number {
   const printOnly = args.includes("--print") || args.includes("-p");
   const useLocal = args.includes("--local");
 
-  const dir = ensureReinsDir();
-  if (!fs.existsSync(guardsPath())) saveGuards(loadGuards());
-  if (!fs.existsSync(configPath())) saveConfig(loadConfig());
+  // init always targets the CURRENT directory (it's an explicit "set up here"),
+  // never a parent project found by walk-up.
+  const here = process.cwd();
+  const dir = ensureReinsDir(here);
+  if (!fs.existsSync(guardsPath(here))) saveGuards(loadGuards(here), here);
+  if (!fs.existsSync(configPath(here))) saveConfig(loadConfig(here), here);
 
   console.log(c.green("✓ Initialized ") + c.dim(dir));
   console.log(c.dim("  · guards.json   (default denylist — edit or use `reins guard`)"));

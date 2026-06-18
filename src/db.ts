@@ -60,6 +60,32 @@ export function openDbReadOnly(payloadCwd?: string): SqlDb | null {
   return driver.open(p, { readOnly: true });
 }
 
+/**
+ * Retry a synchronous DB write on SQLITE_BUSY/locked. busy_timeout handles most
+ * contention, but under several agents hammering one runs.db it can still be
+ * exhausted — dogfooding saw ~40% of rows dropped without this. Capture is
+ * best-effort, so after the retries we give up silently (never block the agent).
+ */
+function withRetry<T>(fn: () => T): T {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      return fn();
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      if (!/locked|busy/i.test(msg)) throw e;
+      lastErr = e;
+      syncSleep(25 * (attempt + 1) + Math.floor(Math.random() * 25));
+    }
+  }
+  throw lastErr;
+}
+
+/** Block the current (short-lived hook) process briefly, without async. */
+function syncSleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /** Insert the session row if it does not exist yet (first tool call / stop). */
 export function upsertSessionStart(
   db: SqlDb,
@@ -67,22 +93,18 @@ export function upsertSessionStart(
   repo: string,
   startedIso: string,
 ): void {
-  db.prepare(
-    `INSERT INTO sessions (id, repo, started) VALUES (?, ?, ?)
-     ON CONFLICT(id) DO NOTHING`,
-  ).run(sessionId, repo, startedIso);
-}
-
-export function nextSeq(db: SqlDb, sessionId: string): number {
-  const row = db
-    .prepare(`SELECT COALESCE(MAX(seq), 0) AS m FROM tool_calls WHERE session_id = ?`)
-    .get(sessionId) as { m: number } | undefined;
-  return (row?.m ?? 0) + 1;
+  withRetry(() =>
+    db
+      .prepare(
+        `INSERT INTO sessions (id, repo, started) VALUES (?, ?, ?)
+         ON CONFLICT(id) DO NOTHING`,
+      )
+      .run(sessionId, repo, startedIso),
+  );
 }
 
 export interface ToolCallRow {
   session_id: string;
-  seq: number;
   tool: string;
   input_summary: string;
   input_hash: string;
@@ -90,18 +112,32 @@ export interface ToolCallRow {
   ts: string;
 }
 
+/**
+ * Insert a tool-call row, computing seq atomically inside the statement. Doing
+ * MAX(seq)+1 as a subquery of the INSERT (rather than a separate read) keeps
+ * seq collision-free under concurrent writers, since the write holds a lock for
+ * the whole statement.
+ */
 export function insertToolCall(db: SqlDb, row: ToolCallRow): void {
-  db.prepare(
-    `INSERT INTO tool_calls (session_id, seq, tool, input_summary, input_hash, ok, ts)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    row.session_id,
-    row.seq,
-    row.tool,
-    row.input_summary,
-    row.input_hash,
-    row.ok,
-    row.ts,
+  withRetry(() =>
+    db
+      .prepare(
+        `INSERT INTO tool_calls (session_id, seq, tool, input_summary, input_hash, ok, ts)
+         VALUES (
+           ?,
+           (SELECT COALESCE(MAX(seq), 0) + 1 FROM tool_calls WHERE session_id = ?),
+           ?, ?, ?, ?, ?
+         )`,
+      )
+      .run(
+        row.session_id,
+        row.session_id,
+        row.tool,
+        row.input_summary,
+        row.input_hash,
+        row.ok,
+        row.ts,
+      ),
   );
 }
 
@@ -123,13 +159,17 @@ export function finalizeSession(
   totalTokens: number | null,
   totalCost: number | null,
 ): void {
-  db.prepare(
-    `UPDATE sessions
-       SET ended = ?, final_outcome = ?,
-           total_tokens = COALESCE(?, total_tokens),
-           total_cost = COALESCE(?, total_cost)
-     WHERE id = ?`,
-  ).run(endedIso, outcome, totalTokens, totalCost, sessionId);
+  withRetry(() =>
+    db
+      .prepare(
+        `UPDATE sessions
+           SET ended = ?, final_outcome = ?,
+               total_tokens = COALESCE(?, total_tokens),
+               total_cost = COALESCE(?, total_cost)
+         WHERE id = ?`,
+      )
+      .run(endedIso, outcome, totalTokens, totalCost, sessionId),
+  );
 }
 
 export function insertOutcome(
@@ -138,7 +178,9 @@ export function insertOutcome(
   stopReason: string,
   gateResult: string | null,
 ): void {
-  db.prepare(
-    `INSERT INTO outcomes (session_id, stop_reason, gate_result) VALUES (?, ?, ?)`,
-  ).run(sessionId, stopReason, gateResult);
+  withRetry(() =>
+    db
+      .prepare(`INSERT INTO outcomes (session_id, stop_reason, gate_result) VALUES (?, ?, ?)`)
+      .run(sessionId, stopReason, gateResult),
+  );
 }

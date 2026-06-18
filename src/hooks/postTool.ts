@@ -24,7 +24,6 @@ export async function runPostTool(): Promise<void> {
     const {
       openDb,
       upsertSessionStart,
-      nextSeq,
       insertToolCall,
       countSameHash,
     } = require("../db") as typeof import("../db");
@@ -33,7 +32,6 @@ export async function runPostTool(): Promise<void> {
     upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
     insertToolCall(db, {
       session_id: sessionId,
-      seq: nextSeq(db, sessionId),
       tool: toolName,
       input_summary: summary,
       input_hash: inputHash,

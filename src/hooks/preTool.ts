@@ -56,7 +56,6 @@ function recordDenied(
     const {
       openDb,
       upsertSessionStart,
-      nextSeq,
       insertToolCall,
     } = require("../db") as typeof import("../db");
     const db = openDb(cwd);
@@ -64,7 +63,6 @@ function recordDenied(
     upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
     insertToolCall(db, {
       session_id: sessionId,
-      seq: nextSeq(db, sessionId),
       tool: toolName,
       input_summary: "DENIED: " + summarizeToolInput(toolName, toolInput),
       input_hash: hashToolInput(toolName, toolInput),

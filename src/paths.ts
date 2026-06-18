@@ -14,7 +14,25 @@ export function resolveProjectDir(payloadCwd?: string): string {
   if (process.env.CLAUDE_PROJECT_DIR && process.env.CLAUDE_PROJECT_DIR.trim()) {
     return process.env.CLAUDE_PROJECT_DIR;
   }
-  return process.cwd();
+  // User-facing commands: find the project by walking up to an existing .reins,
+  // so `reins steer` works from any subdirectory instead of silently writing a
+  // stray .reins/ that the agent (rooted at the project dir) never reads.
+  return findProjectDir(process.cwd());
+}
+
+/**
+ * Walk up from `start` to the first ancestor containing a `.reins/` directory.
+ * Falls back to `start` if none is found (e.g. a not-yet-initialized project).
+ */
+export function findProjectDir(start: string): string {
+  let dir = path.resolve(start);
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".reins"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return path.resolve(start); // reached filesystem root
+    dir = parent;
+  }
 }
 
 /** Absolute path to the project's .reins directory (not guaranteed to exist). */
@@ -25,7 +43,10 @@ export function reinsDir(payloadCwd?: string): string {
 /** Ensure .reins exists and is self-gitignored, then return its path. */
 export function ensureReinsDir(payloadCwd?: string): string {
   const dir = reinsDir(payloadCwd);
-  fs.mkdirSync(dir, { recursive: true });
+  // 0700: .reins holds steering (write access == steering access) and the
+  // trajectory log. Owner-only by default is defense-in-depth for the threat
+  // model. Mode is best-effort (ignored on Windows) and applies on creation.
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const gitignore = path.join(dir, ".gitignore");
   if (!fs.existsSync(gitignore)) {
     // The .reins dir holds local state (steering, db) that must never be
