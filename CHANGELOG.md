@@ -21,6 +21,9 @@ All notable changes to `reins` are documented here. Format loosely follows
 - `REINS_NO_SQLITE` to disable the trajectory log entirely.
 - `reins steer` appends multiple nudges instead of dropping earlier ones
   (`--replace` to overwrite).
+- **Installable from GitHub today**: `npm install -g github:manishkumar/reins`
+  (prebuilt `dist/` committed; no build step or devDeps needed). Tag-triggered
+  npm publish workflow for the eventual registry release.
 
 ### Fixed
 - `reins guard add` validates the pattern (regex/glob) up front and rejects bad

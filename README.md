@@ -27,15 +27,20 @@ The steering is the headline. The SQLite log is a **byproduct** — you never ha
 
 ## Install
 
-> **npm publish is pending.** `npm install -g reins` will be the one-liner once it lands. Until then, install from source — it takes ~20 seconds:
+**Install straight from GitHub — works today, no build step:**
 
 ```bash
-git clone https://github.com/manishkumar/reins
-cd reins
-npm install
-npm run build
-npm link          # puts `reins` on your PATH, pointing at this checkout
-reins version     # verify
+npm install -g github:manishkumar/reins
+reins version
+```
+
+> Once it's published to the npm registry, `npm install -g reins` will be the one-liner. Both put the same `reins` on your PATH.
+
+Prefer a local checkout (for hacking on it)?
+
+```bash
+git clone https://github.com/manishkumar/reins && cd reins
+npm install && npm run build && npm link
 ```
 
 Requires **Node ≥ 18**. (Capture uses SQLite — built in on Node ≥ 22.5, optional on older Node; see [Compatibility](#compatibility). Steering and guards work on any Node ≥ 18.)

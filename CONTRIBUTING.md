@@ -46,6 +46,21 @@ automatically — no need to re-link).
 - Keep runtime dependencies at zero (we rely on `node:` built-ins).
 - Update `CHANGELOG.md` under `[Unreleased]`.
 
+## Releasing (maintainers)
+
+`dist/` is committed so `npm i -g github:manishkumar/reins` works without a build
+step — **rebuild and commit it with any source change**: `npm run build`.
+
+To publish to the npm registry:
+
+1. One-time: add an `NPM_TOKEN` repo secret (npmjs.com → Access Tokens →
+   Automation), and ensure the package name is free (`npm view reins`). If taken,
+   publish scoped (`@yourhandle/reins`) but keep the `bin` name `reins`.
+2. `npm version <patch|minor|major>` then `git push --follow-tags`.
+3. The `Publish to npm` workflow builds, tests, and publishes on the `v*` tag.
+
+(Or publish locally: `npm login && npm publish`.)
+
 ## Reporting bugs
 
 Open an issue with: your OS, `node --version`, `reins version`, the exact
