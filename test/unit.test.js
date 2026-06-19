@@ -65,6 +65,22 @@ test("checkGuards: single-file rm is NOT blocked (no false positive)", () => {
   }
 });
 
+test("checkGuards: a hyphen in a FILENAME is not read as a recursive flag", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  // The live regression: `-pr` inside the filename matched -[a-z]*r[a-z]* and
+  // got the whole `gh pr merge && … && rm -f` line wrongly vetoed.
+  for (const cmd of [
+    "rm -f /tmp/reins-pr-body.md",
+    "rm ./my-recursive-notes.txt",
+    "rm -f build-artifacts.tar",
+  ]) {
+    assert.strictEqual(guards.checkGuards(g, "Bash", { command: cmd }), null, `should allow: ${cmd}`);
+  }
+  // ...but a genuine recursive rm with a hyphenated path is still blocked.
+  assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf /tmp/reins-pr-body" }), "rm -rf still blocked");
+  assert.ok(guards.checkGuards(g, "Bash", { command: "rm dir -r" }), "trailing -r still blocked");
+});
+
 test("checkGuards: pattern inside a quoted arg is not falsely blocked", () => {
   const g = { rules: guards.DEFAULT_RULES };
   // The classic ticket-generators — pattern appears only inside a string arg.

@@ -36,6 +36,15 @@ test("concurrent openDb + insert across processes loses no rows", async () => {
   const { openDbReadOnly } = require("../dist/db.js");
   const db = openDbReadOnly(cwd);
   const rows = Number(db.prepare("SELECT COUNT(*) AS c FROM tool_calls").get().c);
-  fs.rmSync(cwd, { recursive: true, force: true });
+  // Windows won't unlink an open file: close the handle BEFORE removing the dir,
+  // or the WAL-mode .db/.db-wal stays locked. Cleanup is best-effort (retries +
+  // tolerated) and happens before the assert so a temp-dir hiccup never fails an
+  // otherwise-correct run — this is what was reddening CI on windows-latest.
+  db.close?.();
+  try {
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch {
+    /* a lingering WAL handle on Windows; the temp dir is harmless to leave */
+  }
   assert.strictEqual(rows, N, `expected ${N} rows, got ${rows}`);
 });

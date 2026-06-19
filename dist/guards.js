@@ -49,11 +49,14 @@ exports.DEFAULT_RULES = [
     {
         // Blocks RECURSIVE rm in any flag form — the dangerous part. Catches short
         // combos (-rf, -fr, -Rf, -r) and the long form (--recursive), while leaving
-        // a single-file `rm -f x` / `rm --force x` alone. The (?<!-) stops the `r`
-        // inside `--force` from being read as a recursive short flag.
+        // a single-file `rm -f x` / `rm --force x` alone. The leading \s anchors the
+        // match to a real flag TOKEN (whitespace then dash), so a hyphen inside a
+        // FILENAME — e.g. `rm -f /tmp/reins-pr-body.md`, where `-pr` reads like a
+        // recursive short flag — is not mistaken for one. Two separate branches keep
+        // `--force` (which contains an 'r') from matching the short-flag form.
         id: "rm-rf",
         type: "bash",
-        pattern: "\\brm\\b[^;&|]*?(?:(?<!-)-[a-z]*r[a-z]*\\b|--recursive\\b)",
+        pattern: "\\brm\\b[^;&|]*?\\s(?:-[a-z]*r[a-z]*\\b|--recursive\\b)",
         reason: "Recursive rm (rm -rf / --recursive) is blocked by a reins guard.",
     },
     {
