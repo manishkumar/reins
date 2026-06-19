@@ -65,6 +65,14 @@ async function main() {
             const { cmdSessions } = await Promise.resolve().then(() => __importStar(require("./commands/sessions")));
             return cmdSessions(rest);
         }
+        case "watch": {
+            const { cmdWatch } = await Promise.resolve().then(() => __importStar(require("./commands/watch")));
+            return cmdWatch(rest);
+        }
+        case "report": {
+            const { cmdReport } = await Promise.resolve().then(() => __importStar(require("./commands/report")));
+            return cmdReport(rest);
+        }
         case "init": {
             const { cmdInit } = await Promise.resolve().then(() => __importStar(require("./commands/init")));
             return cmdInit(rest);
@@ -154,6 +162,8 @@ USAGE
   reins guard reset                Restore default guards
   reins lastrun [session-prefix]   Readable account of the most recent run
   reins sessions                   List recent sessions in this project
+  reins watch                      Live cockpit: all agents, steer any one
+  reins report [--open]            Write a local HTML report of every run
   reins loops                      Sessions where the agent looped
 
 HOOK ENTRYPOINTS (wired via .claude/settings.json — see \`reins init\`)
