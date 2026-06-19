@@ -1,5 +1,7 @@
 node_modules/
-dist/
+# dist/ is committed so `npm i -g github:manishkumar/reins` works without a
+# build step (no devDeps needed on install). It is rebuilt fresh on `npm
+# publish` via prepublishOnly. Contributors: run `npm run build` after edits.
 .reins/
 *.log
 *.tsbuildinfo
