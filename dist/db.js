@@ -50,10 +50,28 @@ function openDb(payloadCwd) {
     if (!driver)
         return null;
     (0, paths_1.ensureReinsDir)(payloadCwd);
-    const db = driver.open((0, paths_1.dbPath)(payloadCwd));
-    db.exec("PRAGMA journal_mode = WAL;");
-    db.exec("PRAGMA busy_timeout = 4000;");
-    db.exec(SCHEMA);
+    const path = (0, paths_1.dbPath)(payloadCwd);
+    // The whole open is retried, not just the inserts. Under concurrent writers
+    // the lock contention is at OPEN time: setting journal_mode=WAL needs a brief
+    // exclusive lock and otherwise throws "database is locked" immediately —
+    // before busy_timeout helps — so a process losing that race used to drop its
+    // entire batch. Order matters: set busy_timeout FIRST so later statements
+    // wait, and tolerate a busy WAL-set (another process is already on it).
+    const db = withRetry(() => {
+        const d = driver.open(path);
+        d.exec("PRAGMA busy_timeout = 4000;");
+        try {
+            d.exec("PRAGMA journal_mode = WAL;");
+        }
+        catch (e) {
+            if (!/locked|busy/i.test(String(e?.message ?? e)))
+                throw e;
+            // Another writer is establishing WAL; the mode persists on the file, so
+            // proceed — busy_timeout covers the subsequent schema/insert statements.
+        }
+        d.exec(SCHEMA);
+        return d;
+    });
     _db = db;
     return db;
 }
