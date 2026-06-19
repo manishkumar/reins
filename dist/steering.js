@@ -33,65 +33,104 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.steeringFileFor = steeringFileFor;
 exports.writeSteering = writeSteering;
 exports.appendSteering = appendSteering;
 exports.peekSteering = peekSteering;
 exports.clearSteering = clearSteering;
+exports.pendingTargetedSessions = pendingTargetedSessions;
 exports.consumeSteering = consumeSteering;
 exports.formatSteeringContext = formatSteeringContext;
 const fs = __importStar(require("node:fs"));
+const path = __importStar(require("node:path"));
 const paths_1 = require("./paths");
+/**
+ * Steering can be a broadcast (global) or targeted at one session. With several
+ * agents in one repo, a global nudge lands on whichever session hits the next
+ * tool boundary first; targeting one writes a per-session file the hook prefers.
+ *
+ *   global   -> .reins/steering.txt
+ *   targeted -> .reins/steering.<sessionId>.txt
+ */
+function steeringFileFor(payloadCwd, sessionId) {
+    if (!sessionId)
+        return (0, paths_1.steeringPath)(payloadCwd);
+    return path.join((0, paths_1.reinsDir)(payloadCwd), `steering.${sanitize(sessionId)}.txt`);
+}
+function sanitize(id) {
+    return id.replace(/[^a-zA-Z0-9_.-]/g, "_");
+}
 /** Queue a steering message for the next tool boundary, replacing any pending. */
-function writeSteering(message, payloadCwd) {
+function writeSteering(message, payloadCwd, sessionId) {
     (0, paths_1.ensureReinsDir)(payloadCwd);
-    fs.writeFileSync((0, paths_1.steeringPath)(payloadCwd), message.trim() + "\n");
+    fs.writeFileSync(steeringFileFor(payloadCwd, sessionId), message.trim() + "\n");
 }
 /**
  * Append a nudge to any pending steering instead of clobbering it. Two quick
  * `reins steer` calls before the next tool boundary should both reach the
  * agent, not silently drop the first. Returns the number of nudges now queued.
  */
-function appendSteering(message, payloadCwd) {
-    const existing = peekSteering(payloadCwd);
+function appendSteering(message, payloadCwd, sessionId) {
+    const existing = peekSteering(payloadCwd, sessionId);
     if (!existing) {
-        writeSteering(message, payloadCwd);
+        writeSteering(message, payloadCwd, sessionId);
         return 1;
     }
     const combined = existing + "\n" + message.trim();
-    fs.writeFileSync((0, paths_1.steeringPath)(payloadCwd), combined + "\n");
+    fs.writeFileSync(steeringFileFor(payloadCwd, sessionId), combined + "\n");
     return combined.split("\n").filter((l) => l.trim()).length;
 }
 /** Return the pending steering message without consuming it (for `reins steer`). */
-function peekSteering(payloadCwd) {
+function peekSteering(payloadCwd, sessionId) {
     try {
-        const s = fs.readFileSync((0, paths_1.steeringPath)(payloadCwd), "utf8").trim();
+        const s = fs.readFileSync(steeringFileFor(payloadCwd, sessionId), "utf8").trim();
         return s ? s : null;
     }
     catch {
         return null;
     }
 }
-function clearSteering(payloadCwd) {
+function clearSteering(payloadCwd, sessionId) {
     try {
-        fs.rmSync((0, paths_1.steeringPath)(payloadCwd));
+        fs.rmSync(steeringFileFor(payloadCwd, sessionId));
     }
     catch {
         /* nothing to clear */
     }
 }
+/** List all session ids that currently have targeted steering pending. */
+function pendingTargetedSessions(payloadCwd) {
+    try {
+        return fs
+            .readdirSync((0, paths_1.reinsDir)(payloadCwd))
+            .map((f) => /^steering\.(.+)\.txt$/.exec(f)?.[1])
+            .filter((x) => !!x);
+    }
+    catch {
+        return [];
+    }
+}
 /**
- * Atomically read AND clear the pending steering message (one-shot delivery).
- * Returns null if nothing is queued. Renaming first means a concurrent `steer`
+ * Atomically read AND clear the pending steering for this tool boundary.
+ * A session-targeted nudge (matching this session_id) is preferred; otherwise
+ * the global broadcast is consumed. Renaming first means a concurrent `steer`
  * write can't be silently dropped between read and delete.
  */
-function consumeSteering(payloadCwd) {
-    const p = (0, paths_1.steeringPath)(payloadCwd);
+function consumeSteering(payloadCwd, sessionId) {
+    if (sessionId) {
+        const targeted = consumeFile(steeringFileFor(payloadCwd, sessionId));
+        if (targeted)
+            return targeted;
+    }
+    return consumeFile((0, paths_1.steeringPath)(payloadCwd));
+}
+function consumeFile(p) {
     const tmp = p + ".consuming." + process.pid;
     try {
         fs.renameSync(p, tmp);
     }
     catch {
-        return null; // no pending steering
+        return null; // not present
     }
     try {
         const s = fs.readFileSync(tmp, "utf8").trim();

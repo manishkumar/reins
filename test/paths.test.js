@@ -39,3 +39,17 @@ test("appendSteering: keeps both nudges; consume returns combined", () => {
   assert.strictEqual(steering.consumeSteering(dir), null); // one-shot
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("consumeSteering: targeted nudge only reaches its session; broadcast is shared", () => {
+  const dir = tmp();
+  steering.writeSteering("for A only", dir, "sessA");
+  steering.writeSteering("broadcast", dir); // global
+
+  // Session B (no targeted file) gets the broadcast.
+  assert.strictEqual(steering.consumeSteering(dir, "sessB"), "broadcast");
+  // Session A still has its targeted nudge waiting; it prefers that.
+  assert.strictEqual(steering.consumeSteering(dir, "sessA"), "for A only");
+  // Both consumed now.
+  assert.strictEqual(steering.consumeSteering(dir, "sessA"), null);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

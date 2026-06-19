@@ -38,7 +38,7 @@ async function runPreTool() {
     }
     // 2. STEERING — soft, one-shot, overridable by the model's judgment.
     try {
-        const message = (0, steering_1.consumeSteering)(cwd);
+        const message = (0, steering_1.consumeSteering)(cwd, sessionId || undefined);
         if (message) {
             (0, hookio_1.emitPreToolContext)((0, steering_1.formatSteeringContext)(message));
             return;

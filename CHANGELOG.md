@@ -21,6 +21,9 @@ All notable changes to `reins` are documented here. Format loosely follows
 - `REINS_NO_SQLITE` to disable the trajectory log entirely.
 - `reins steer` appends multiple nudges instead of dropping earlier ones
   (`--replace` to overwrite).
+- Per-session steering: `reins steer "…" --session <id>` targets one agent (the
+  multi-agent "which session am I steering" gap); a plain `reins steer` stays a
+  broadcast. The pre-tool hook prefers a session-targeted nudge, else the global.
 - **Installable from GitHub today**: `npm install -g github:manishkumar/reins`
   (prebuilt `dist/` committed; no build step or devDeps needed). Tag-triggered
   npm publish workflow for the eventual registry release.

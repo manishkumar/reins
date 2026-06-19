@@ -37,7 +37,7 @@ export async function runPreTool(): Promise<void> {
 
   // 2. STEERING — soft, one-shot, overridable by the model's judgment.
   try {
-    const message = consumeSteering(cwd);
+    const message = consumeSteering(cwd, sessionId || undefined);
     if (message) {
       emitPreToolContext(formatSteeringContext(message));
       return;

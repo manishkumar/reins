@@ -112,6 +112,7 @@ USAGE
   reins doctor                     Diagnose your setup when something's off
   reins uninstall [--purge]        Remove reins hooks (--purge also drops .reins)
   reins steer "<message>"          Queue live steering for the next tool call
+  reins steer "<msg>" --session <id>  Target one agent (id/prefix from sessions)
   reins steer "<message>" --replace  Overwrite pending steering (default: append)
   reins steer                      Show pending steering
   reins steer --clear              Clear pending steering

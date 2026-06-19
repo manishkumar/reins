@@ -79,6 +79,15 @@ Not sure it's all hooked up? Run **`reins doctor`** — it checks your Node/capt
 
 Two quick `reins steer`s before the next tool call **both** reach the agent (they append). Use `--replace` to overwrite, `reins steer --clear` to reset.
 
+**Running several agents in one repo?** A plain `reins steer` is a *broadcast* — it lands on whichever session hits the next tool boundary first. To nudge a specific agent, target its session (ids from `reins sessions`, prefixes accepted):
+
+```bash
+reins sessions                                   # find the session id
+reins steer "stay on the payments module" --session 3b9f2a1c
+```
+
+A targeted nudge only reaches that session; broadcasts still go to everyone else.
+
 ---
 
 ## Guard — the hard veto

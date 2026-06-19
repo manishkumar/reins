@@ -1,10 +1,28 @@
 import * as fs from "node:fs";
-import { steeringPath, ensureReinsDir } from "./paths";
+import * as path from "node:path";
+import { steeringPath, reinsDir, ensureReinsDir } from "./paths";
+
+/**
+ * Steering can be a broadcast (global) or targeted at one session. With several
+ * agents in one repo, a global nudge lands on whichever session hits the next
+ * tool boundary first; targeting one writes a per-session file the hook prefers.
+ *
+ *   global   -> .reins/steering.txt
+ *   targeted -> .reins/steering.<sessionId>.txt
+ */
+export function steeringFileFor(payloadCwd: string | undefined, sessionId?: string): string {
+  if (!sessionId) return steeringPath(payloadCwd);
+  return path.join(reinsDir(payloadCwd), `steering.${sanitize(sessionId)}.txt`);
+}
+
+function sanitize(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_.-]/g, "_");
+}
 
 /** Queue a steering message for the next tool boundary, replacing any pending. */
-export function writeSteering(message: string, payloadCwd?: string): void {
+export function writeSteering(message: string, payloadCwd?: string, sessionId?: string): void {
   ensureReinsDir(payloadCwd);
-  fs.writeFileSync(steeringPath(payloadCwd), message.trim() + "\n");
+  fs.writeFileSync(steeringFileFor(payloadCwd, sessionId), message.trim() + "\n");
 }
 
 /**
@@ -12,47 +30,67 @@ export function writeSteering(message: string, payloadCwd?: string): void {
  * `reins steer` calls before the next tool boundary should both reach the
  * agent, not silently drop the first. Returns the number of nudges now queued.
  */
-export function appendSteering(message: string, payloadCwd?: string): number {
-  const existing = peekSteering(payloadCwd);
+export function appendSteering(message: string, payloadCwd?: string, sessionId?: string): number {
+  const existing = peekSteering(payloadCwd, sessionId);
   if (!existing) {
-    writeSteering(message, payloadCwd);
+    writeSteering(message, payloadCwd, sessionId);
     return 1;
   }
   const combined = existing + "\n" + message.trim();
-  fs.writeFileSync(steeringPath(payloadCwd), combined + "\n");
+  fs.writeFileSync(steeringFileFor(payloadCwd, sessionId), combined + "\n");
   return combined.split("\n").filter((l) => l.trim()).length;
 }
 
 /** Return the pending steering message without consuming it (for `reins steer`). */
-export function peekSteering(payloadCwd?: string): string | null {
+export function peekSteering(payloadCwd?: string, sessionId?: string): string | null {
   try {
-    const s = fs.readFileSync(steeringPath(payloadCwd), "utf8").trim();
+    const s = fs.readFileSync(steeringFileFor(payloadCwd, sessionId), "utf8").trim();
     return s ? s : null;
   } catch {
     return null;
   }
 }
 
-export function clearSteering(payloadCwd?: string): void {
+export function clearSteering(payloadCwd?: string, sessionId?: string): void {
   try {
-    fs.rmSync(steeringPath(payloadCwd));
+    fs.rmSync(steeringFileFor(payloadCwd, sessionId));
   } catch {
     /* nothing to clear */
   }
 }
 
+/** List all session ids that currently have targeted steering pending. */
+export function pendingTargetedSessions(payloadCwd?: string): string[] {
+  try {
+    return fs
+      .readdirSync(reinsDir(payloadCwd))
+      .map((f) => /^steering\.(.+)\.txt$/.exec(f)?.[1])
+      .filter((x): x is string => !!x);
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Atomically read AND clear the pending steering message (one-shot delivery).
- * Returns null if nothing is queued. Renaming first means a concurrent `steer`
+ * Atomically read AND clear the pending steering for this tool boundary.
+ * A session-targeted nudge (matching this session_id) is preferred; otherwise
+ * the global broadcast is consumed. Renaming first means a concurrent `steer`
  * write can't be silently dropped between read and delete.
  */
-export function consumeSteering(payloadCwd?: string): string | null {
-  const p = steeringPath(payloadCwd);
+export function consumeSteering(payloadCwd?: string, sessionId?: string): string | null {
+  if (sessionId) {
+    const targeted = consumeFile(steeringFileFor(payloadCwd, sessionId));
+    if (targeted) return targeted;
+  }
+  return consumeFile(steeringPath(payloadCwd));
+}
+
+function consumeFile(p: string): string | null {
   const tmp = p + ".consuming." + process.pid;
   try {
     fs.renameSync(p, tmp);
   } catch {
-    return null; // no pending steering
+    return null; // not present
   }
   try {
     const s = fs.readFileSync(tmp, "utf8").trim();
