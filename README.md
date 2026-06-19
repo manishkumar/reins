@@ -161,6 +161,54 @@ Summary
 - `reins lastrun <session-prefix>` — inspect a specific older run.
 - `reins loops` — just the sessions where the agent got stuck.
 
+### `reins watch` — the multi-agent cockpit
+
+`reins sessions` is a snapshot; **`reins watch` is the live view.** A self-refreshing dashboard of every agent in the repo — each one's last tool call, whether it's **active / idle / looping right now**, and any steering already queued for it — built for the case a built-in queued message can't serve: **aiming a nudge at one of several running agents without alt-tabbing into its window.**
+
+```
+$ reins watch
+reins · watch  myproject   14:22:31 · every 2s · loop≥3
+  broadcast steer queued: "keep it minimal"
+
+  › 3b9f2a1c  ● active     18 calls · 3s ago    ✎ steer queued
+      ▶ Bash     npm test
+      ✏ Edit     src/auth/index.ts
+      ▶ Bash     npm run build
+  ────────────────────────────────────────────────────────────
+    7d4e1100  ⟳ looping    24 calls · 1s ago
+      ▶ Bash     npm run build ⟳
+      ▶ Bash     npm run build ⟳
+      ▶ Bash     npm run build ⟳
+  ────────────────────────────────────────────────────────────
+    9f0c5522  completed     6 calls · 2m ago
+      · Read     src/api/routes.ts
+      ✏ Edit     src/api/index.ts
+      ⛔ Bash     rm -rf build
+
+  ↑/↓ jk select · s steer one · b broadcast · c clear · r refresh · q quit
+```
+
+Each agent is its own block — live status (`active` / `idle` / `looping` / outcome), its **recent trajectory tail**, and any queued steering — divided from the next by a rule. Status is driven by *recent tool activity*, not the per-turn Stop hook, so an agent that's mid-conversation reads `active`, not `completed`.
+
+Select a session with `↑/↓` (or `j`/`k`), then:
+- **`s`** — steer *just that agent* (writes its per-session nudge; lands at its next tool call).
+- **`b`** — broadcast a nudge to all of them.
+- **`c`** — clear that agent's queued steering. **`r`** — refresh now. **`q`** — quit.
+
+Read-only over the same `.reins/runs.db`; it never touches a running agent except through the steering you type. Tune the cadence with `reins watch -n 1` (seconds). Piped or non-interactive (`reins watch --once`) it prints a single snapshot instead of taking over the screen — handy in scripts. No TUI library, no daemon — just ANSI on the terminal you already have.
+
+### `reins report` — the captured runs as a local web page
+
+`watch` is the live view; **`reins report` is the browsable archive.** It reads `.reins/runs.db` and writes a single **self-contained HTML file** (inline CSS, no JS framework, **zero network requests** — nothing leaves your machine) with summary cards (sessions, tool calls, blocked, failed, loops) and every session's full trajectory, with guard-blocks (⛔) and loops (⟳) marked.
+
+```bash
+reins report            # writes .reins/report.html
+reins report --open     # ...and opens it in your browser
+reins report -o /tmp/run.html   # custom path (e.g. to share a single run)
+```
+
+It's the same local-first deal as the rest of reins: a file you own, readable offline, safe to delete. The richer "what happened across every run" view a terminal can't give you — and the natural home for the deeper insights (cost rollups, guard-fire heatmaps, per-tool breakdowns) as they land.
+
 It's all in `.reins/runs.db` — three tables (`sessions`, `tool_calls`, `outcomes`) you can query with raw SQL whenever you want. Token/cost columns are best-effort (read from the session transcript) and may be null; that's harmless.
 
 ```sql
@@ -241,6 +289,8 @@ reins steer [--clear]            Show / clear pending steering
 reins guard list|add|remove|reset
 reins lastrun [session-prefix]   Readable account of a run
 reins sessions [-n N]            List recent sessions
+reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one
+reins report [--open] [-o FILE]  Self-contained local HTML report of all runs
 reins loops                      Sessions where the agent looped
 reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)
 ```

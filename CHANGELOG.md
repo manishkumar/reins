@@ -24,6 +24,18 @@ All notable changes to `reins` are documented here. Format loosely follows
 - Per-session steering: `reins steer "…" --session <id>` targets one agent (the
   multi-agent "which session am I steering" gap); a plain `reins steer` stays a
   broadcast. The pre-tool hook prefers a session-targeted nudge, else the global.
+- `reins watch` — a live, auto-refreshing cockpit for all agents in the repo:
+  each agent its own block (status + recent trajectory tail), divided by a rule,
+  with keyboard actions to steer one agent (`s`), broadcast (`b`), or clear
+  (`c`). Liveness is driven by recent tool activity, not the per-turn Stop hook,
+  so a mid-conversation agent reads `active`, not `completed`. Read-only over
+  `runs.db`; dependency-free (ANSI + node:readline); `--once` / non-TTY prints a
+  single snapshot. The fleet view that built-in queued messages can't do.
+- `reins report [--open]` — render the captured trajectory to a single
+  self-contained HTML file (inline CSS, zero network): summary cards (sessions,
+  tool calls, blocked, failed, loops) and every session's full trajectory with
+  guard-blocks and loops marked. Local-first browsable archive; `-o` for a
+  custom path. HTML output escapes captured text (XSS-safe).
 - **Installable from GitHub today**: `npm install -g github:manishkumar/reins`
   (prebuilt `dist/` committed; no build step or devDeps needed). Tag-triggered
   npm publish workflow for the eventual registry release.
