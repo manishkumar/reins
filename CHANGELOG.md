@@ -23,6 +23,8 @@ All notable changes to `reins` are documented here. Format loosely follows
   (`--replace` to overwrite).
 
 ### Fixed
+- `reins guard add` validates the pattern (regex/glob) up front and rejects bad
+  input, instead of silently saving a dead guard that never matches.
 - Path guards now fire on the **absolute** paths Claude Code sends (and on
   Windows separators); the `.env` default covers the `.env.*` family. Closes a
   silent false-security gap where `infra/**` never matched.

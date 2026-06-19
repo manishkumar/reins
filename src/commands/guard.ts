@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import { loadGuards, saveGuards, DEFAULT_RULES, GuardRule, GuardType } from "../guards";
+import { loadGuards, saveGuards, globToRegExp, DEFAULT_RULES, GuardRule, GuardType } from "../guards";
 import { c } from "./format";
 
 export function cmdGuard(args: string[]): number {
@@ -56,6 +56,24 @@ function add(args: string[]): number {
   if (!pattern) {
     console.error(c.red("Missing pattern."));
     return 1;
+  }
+  // Validate up front: a pattern that doesn't compile would be silently skipped
+  // at match time, leaving a dead guard the user believes is protecting them.
+  if (type === "bash") {
+    try {
+      new RegExp(pattern);
+    } catch (e) {
+      console.error(c.red("Invalid regex: ") + c.dim(String((e as Error).message)));
+      console.error(c.dim("  (bash guards are JavaScript regular expressions)"));
+      return 1;
+    }
+  } else {
+    try {
+      globToRegExp(pattern);
+    } catch (e) {
+      console.error(c.red("Invalid glob: ") + c.dim(String((e as Error).message)));
+      return 1;
+    }
   }
   if (!reason) {
     reason =
