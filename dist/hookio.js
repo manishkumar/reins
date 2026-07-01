@@ -4,6 +4,7 @@
 // JSON object and exits 0. No output = passthrough/allow.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.emitDeny = emitDeny;
+exports.emitAsk = emitAsk;
 exports.emitPreToolContext = emitPreToolContext;
 exports.emitPostToolContext = emitPostToolContext;
 exports.emitNothing = emitNothing;
@@ -12,6 +13,17 @@ function emitDeny(reason) {
         hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: "deny",
+            permissionDecisionReason: reason,
+        },
+    }));
+}
+/** Escalate to the human: Claude Code shows its native permission prompt with
+ *  our reason. In non-interactive runs there is no prompt, so this denies. */
+function emitAsk(reason) {
+    process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "ask",
             permissionDecisionReason: reason,
         },
     }));

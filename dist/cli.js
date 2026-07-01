@@ -155,9 +155,10 @@ USAGE
   reins steer "<message>" --replace  Overwrite pending steering (default: append)
   reins steer                      Show pending steering
   reins steer --clear              Clear pending steering
-  reins guard list                 Show guard rules (hard vetoes)
+  reins guard list                 Show guard rules (deny = hard veto, ask = escalate)
   reins guard add bash "<regex>"   Block matching Bash commands
   reins guard add path "<glob>"    Block writes to matching paths (e.g. **/.env)
+  reins guard add ... --ask        Escalate to you (permission prompt) instead of denying
   reins guard remove <id>          Remove a guard
   reins guard reset                Restore default guards
   reins lastrun [session-prefix]   Readable account of the most recent run
@@ -170,8 +171,8 @@ HOOK ENTRYPOINTS (wired via .claude/settings.json — see \`reins init\`)
   reins hook pre-tool | post-tool | stop
 
 Steering is a soft nudge the model weighs — think "the detail you forgot to put
-in the original prompt", not "an order that overrides it". For a hard, the agent
-physically can't proceed, use a guard.`);
+in the original prompt", not "an order that overrides it". For a hard "never",
+use a guard; for a "check with me first", use a guard with --ask.`);
 }
 main()
     .then((code) => process.exit(code))

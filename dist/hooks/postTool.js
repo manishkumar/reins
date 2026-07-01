@@ -21,7 +21,7 @@ async function runPostTool() {
     const ok = inferOk(toolResponse);
     let repeatCount = 0;
     try {
-        const { openDb, upsertSessionStart, insertToolCall, countSameHash, } = require("../db");
+        const { openDb, upsertSessionStart, insertToolCall, countTrailingSameHash, } = require("../db");
         const db = sessionId ? openDb(cwd) : null; // no real session => don't record
         if (db) {
             upsertSessionStart(db, sessionId, (0, paths_1.resolveProjectDir)(cwd), (0, util_1.nowIso)());
@@ -33,7 +33,9 @@ async function runPostTool() {
                 ok,
                 ts: (0, util_1.nowIso)(),
             });
-            repeatCount = countSameHash(db, sessionId, inputHash);
+            // Consecutive streak, not all-session count — re-running `npm test` after
+            // edits is iteration, not a loop.
+            repeatCount = countTrailingSameHash(db, sessionId, inputHash);
         }
     }
     catch (e) {
@@ -43,7 +45,7 @@ async function runPostTool() {
     const threshold = (0, config_1.loadConfig)(cwd).loopThreshold;
     if (repeatCount >= threshold) {
         const warning = `[reins loop alarm] You have now run ${toolName} with identical input ` +
-            `${repeatCount} times in this session ("${(0, util_1.truncate)(summary, 80)}"). ` +
+            `${repeatCount} times in a row ("${(0, util_1.truncate)(summary, 80)}"). ` +
             `This usually means the current approach is stuck. Stop repeating it and ` +
             `try something different — change the input, inspect why it isn't working, ` +
             `or ask the developer.`;

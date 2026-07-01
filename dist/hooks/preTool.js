@@ -22,15 +22,22 @@ async function runPreTool() {
     const sessionId = payload.session_id || "";
     const toolName = payload.tool_name || "";
     const toolInput = payload.tool_input ?? {};
-    // 1. GUARD — hard veto. If anything here is uncertain we fail open (allow),
-    //    but the matching itself is deterministic and self-contained.
+    // 1. GUARD — the decision point. "deny" is the hard veto; "ask" escalates to
+    //    the human via the native permission prompt. If anything here is uncertain
+    //    we fail open (allow), but the matching itself is deterministic.
     try {
         const guards = (0, guards_1.loadGuards)(cwd);
         const match = (0, guards_1.checkGuards)(guards, toolName, toolInput);
         if (match) {
-            (0, hookio_1.emitDeny)(match.rule.reason);
-            recordDenied(cwd, sessionId, toolName, toolInput);
-            return; // do NOT consume steering on a denied call; leave it for next time
+            if (match.rule.action === "ask") {
+                (0, hookio_1.emitAsk)(match.rule.reason);
+                recordDecision(cwd, sessionId, toolName, toolInput, match.rule, "ASKED");
+            }
+            else {
+                (0, hookio_1.emitDeny)(match.rule.reason);
+                recordDecision(cwd, sessionId, toolName, toolInput, match.rule, "DENIED");
+            }
+            return; // do NOT consume steering on a gated call; leave it for next time
         }
     }
     catch (e) {
@@ -49,7 +56,16 @@ async function runPreTool() {
     }
     // 3. PASSTHROUGH — allow, inject nothing.
 }
-function recordDenied(cwd, sessionId, toolName, toolInput) {
+/**
+ * Record a gate decision with its provenance (which rule fired). The rule id in
+ * the summary is the seed of the audit trail: `lastrun` shows not just that a
+ * call was stopped, but by which rule.
+ *
+ * ASKED rows get a decision-derived hash on purpose: if the human approves, the
+ * real call executes and PostToolUse records it with the true input hash — an
+ * ASKED row sharing that hash would inflate the loop alarm's repeat count.
+ */
+function recordDecision(cwd, sessionId, toolName, toolInput, rule, decision) {
     if (!sessionId)
         return; // manual/test invocation — don't pollute the log
     try {
@@ -61,14 +77,18 @@ function recordDenied(cwd, sessionId, toolName, toolInput) {
         insertToolCall(db, {
             session_id: sessionId,
             tool: toolName,
-            input_summary: "DENIED: " + (0, util_1.summarizeToolInput)(toolName, toolInput),
-            input_hash: (0, util_1.hashToolInput)(toolName, toolInput),
-            ok: 0,
+            input_summary: `${decision}: ` + (0, util_1.summarizeToolInput)(toolName, toolInput) + ` [guard:${rule.id}]`,
+            input_hash: decision === "ASKED"
+                ? (0, util_1.hashToolInput)("ASKED:" + toolName, toolInput)
+                : (0, util_1.hashToolInput)(toolName, toolInput),
+            // A deny is a definitive non-execution; an ask's resolution is unknown
+            // here (if approved, the executed call gets its own PostToolUse row).
+            ok: decision === "DENIED" ? 0 : null,
             ts: (0, util_1.nowIso)(),
         });
     }
     catch (e) {
-        warn("capture (denied) failed: " + String(e));
+        warn("capture (" + decision.toLowerCase() + ") failed: " + String(e));
     }
 }
 function warn(msg) {

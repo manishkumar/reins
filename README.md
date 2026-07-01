@@ -16,9 +16,9 @@ You're watching an agent work and you can see it drifting — over-engineering, 
 
 | When | Reflex | What it does | Hardness |
 |---|---|---|---|
-| **Before** a tool runs | **Guard** | Hard-vetoes forbidden commands/paths (`rm -rf`, writes to `.env`, …) | Hard — non-overridable |
+| **Before** a tool runs | **Guard** | Hard-vetoes forbidden commands/paths (`rm -rf`, writes to `.env`, …) — or escalates to you with `--ask` | Hard veto (deny) / your call (ask) |
 | **During** the run | **Steer** | Injects a one-line course-correction at the next tool boundary | Soft — the model weighs it |
-| **After each** tool | **Loop alarm** | Warns inline when the same call repeats N times | Observe + warn |
+| **After each** tool | **Loop alarm** | Warns inline when the same call repeats N times in a row | Observe + warn |
 | **At the end** | **Capture** | Logs the run's trajectory + outcome to SQLite | Observe |
 
 The steering is the headline. The SQLite log is a **byproduct** — you never have to open it for the tool to earn its place.
@@ -75,6 +75,8 @@ Not sure it's all hooked up? Run **`reins doctor`** — it checks your Node/capt
 
 **1. Latency: next tool boundary, not "right now."** A `PreToolUse` hook only fires when the agent is *about to call a tool*. So steering lands at the agent's next decision point — usually seconds away, but not instantaneous. This is the correct async model (you can't babysit an agent keystroke-by-keystroke), and it's why the verbs are "steer" and "nudge," never "stop" or "interrupt."
 
+One delivery guarantee: if there **is** no next tool call — you steered as the agent was already finishing — the Stop hook delivers the nudge instead, briefly holding the stop and handing the note over. A queued steer is never silently lost.
+
 **2. Steering composes with the goal; it can't overwrite it.** Think of `reins steer` as **the detail you forgot to put in the original prompt** — added spec from the same author. *"focus on the token refresh path"*, *"keep it minimal"*, *"use the existing logger"*. It does **not** work as a hijack: a nudge that flatly contradicts the user's explicit instructions ("STOP, ignore everything, do X instead") is correctly weighed down by the model. Since the person typing `reins steer` is the same person who wrote the prompt, this is rarely a real constraint — just phrase steering as *more spec*, not *a reversal*. **If you need a hard "never do X," that's a guard, not steering.**
 
 Two quick `reins steer`s before the next tool call **both** reach the agent (they append). Use `--replace` to overwrite, `reins steer --clear` to reset.
@@ -90,7 +92,7 @@ A targeted nudge only reaches that session; broadcasts still go to everyone else
 
 ---
 
-## Guard — the hard veto
+## Guard — the hard veto (and the escalation)
 
 Guards turn a forbidden command or path into a wall. Mechanism: `PreToolUse` → `permissionDecision: "deny"`. The agent physically cannot proceed with that call — this holds **even under `--permission-mode bypassPermissions`**.
 
@@ -99,9 +101,12 @@ reins guard list                              # see active rules + their ids
 reins guard add bash "psql.*production"       # block a command pattern (regex)
 reins guard add path "infra/**"               # block writes to paths (glob)
 reins guard add bash "docker .*--privileged" --reason "no privileged containers"
+reins guard add bash "git push" --ask         # escalate to YOU instead of denying
 reins guard remove <id>                       # ids shown by `guard list`
 reins guard reset                             # back to defaults
 ```
+
+**`--ask` is the middle hardness.** Some actions aren't *never* — they're *check with me first* (pushes, prod-adjacent commands, package publishes). An `ask` rule doesn't veto; it makes Claude Code pause and show **you** the exact call with your rule's reason, and you approve or deny it in the moment (`permissionDecision: "ask"`). One thing to know: it needs a human at the terminal — in a headless/non-interactive run there's no one to ask, so `ask` effectively denies there. When you need a wall that holds unconditionally, that's `deny` (the default).
 
 Ships with a sane default denylist (override freely): `rm -rf`, `git push --force`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env*` / `.git/**`.
 
@@ -118,7 +123,7 @@ Guards are **deterministic vetoes on recognized patterns** — excellent speed b
 
 ## Loop alarm
 
-When the agent runs the **same tool with identical input** ≥ N times (default 3), `reins` injects an inline warning at that tool boundary nudging it to try something else, and records the loop.
+When the agent runs the **same tool with identical input** ≥ N times **in a row** (default 3), `reins` injects an inline warning at that tool boundary nudging it to try something else, and records the loop. Consecutive is the operative word: re-running `npm test` after each edit is healthy iteration and never trips the alarm — the same call three times *with nothing in between* does.
 
 ```bash
 reins loops          # list sessions where loops happened
@@ -286,7 +291,7 @@ reins uninstall [--purge]        Remove the hooks (--purge also drops .reins/)
 reins doctor                     Diagnose your setup
 reins steer "<msg>" [--replace]  Queue steering for the next tool call (appends)
 reins steer [--clear]            Show / clear pending steering
-reins guard list|add|remove|reset
+reins guard list|add|remove|reset    (add takes --ask to escalate, not deny)
 reins lastrun [session-prefix]   Readable account of a run
 reins sessions [-n N]            List recent sessions
 reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one
@@ -297,7 +302,7 @@ reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)
 
 ## How it works (one breath)
 
-Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny) then steering (inject + clear). `post-tool` records the call and raises the loop alarm. `stop` finalizes the run. State lives in `.reins/`: `steering.txt`, `guards.json`, `config.json`, `runs.db`. CLI commands find `.reins/` by walking up from your current directory, so they work from any subdirectory of the project.
+Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny or ask) then steering (inject + clear). `post-tool` records the call and raises the loop alarm on consecutive repeats. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run. State lives in `.reins/`: `steering.txt`, `guards.json`, `config.json`, `runs.db`. CLI commands find `.reins/` by walking up from your current directory, so they work from any subdirectory of the project.
 
 ## Contributing
 

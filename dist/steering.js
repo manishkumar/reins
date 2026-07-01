@@ -41,6 +41,7 @@ exports.clearSteering = clearSteering;
 exports.pendingTargetedSessions = pendingTargetedSessions;
 exports.consumeSteering = consumeSteering;
 exports.formatSteeringContext = formatSteeringContext;
+exports.formatSteeringStopReason = formatSteeringStopReason;
 const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
 const paths_1 = require("./paths");
@@ -160,4 +161,18 @@ function formatSteeringContext(message) {
         "\n\nTreat this as additional detail for the task in progress, from the same " +
         "person who wrote the original request — spec they want folded into the " +
         "current work. It refines the goal; it does not replace it.");
+}
+/**
+ * The Stop-hook variant: steering that arrived after the agent's last tool
+ * boundary is delivered by blocking the stop (this text is the block reason).
+ * Same author-framing as above, plus explicit instruction on what "continue"
+ * means here — address the note, then finish; don't restart the task.
+ */
+function formatSteeringStopReason(message) {
+    return ("[reins — steering from the developer, delivered as you were finishing]\n" +
+        message +
+        "\n\nThis note was queued before you stopped and would otherwise have been " +
+        "lost. It is additional detail from the same person who wrote the original " +
+        "request. Address it — adjusting or extending the work you just did as " +
+        "needed — and then finish. It refines the goal; it does not replace it.");
 }

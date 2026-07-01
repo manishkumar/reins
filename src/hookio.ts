@@ -14,6 +14,20 @@ export function emitDeny(reason: string): void {
   );
 }
 
+/** Escalate to the human: Claude Code shows its native permission prompt with
+ *  our reason. In non-interactive runs there is no prompt, so this denies. */
+export function emitAsk(reason: string): void {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: reason,
+      },
+    }),
+  );
+}
+
 export function emitPreToolContext(additionalContext: string): void {
   process.stdout.write(
     JSON.stringify({

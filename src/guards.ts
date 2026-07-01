@@ -3,6 +3,15 @@ import { guardsPath, ensureReinsDir } from "./paths";
 
 export type GuardType = "bash" | "path";
 
+/** What a matching rule does at the tool boundary.
+ *  "deny" — hard veto, the agent cannot proceed (the default).
+ *  "ask"  — escalate: surface Claude Code's native permission prompt with our
+ *           reason, letting the human decide. The middle hardness for actions
+ *           that are sometimes fine (git push, prod-adjacent commands). Note:
+ *           in a headless/non-interactive run there is no one to ask, so "ask"
+ *           effectively denies there. */
+export type GuardAction = "deny" | "ask";
+
 export interface GuardRule {
   id: string;
   type: GuardType;
@@ -10,6 +19,8 @@ export interface GuardRule {
    *  For "path": a glob tested against file paths in the tool input. */
   pattern: string;
   reason: string;
+  /** Absent means "deny" — every pre-0.2 guards.json stays valid unchanged. */
+  action?: GuardAction;
 }
 
 export interface GuardsFile {

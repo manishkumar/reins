@@ -168,6 +168,34 @@ export function countSameHash(db: SqlDb, sessionId: string, inputHash: string): 
   return row?.c ?? 0;
 }
 
+/**
+ * Length of the CONSECUTIVE trailing streak of this input_hash in the session.
+ * This — not the all-session count — is what the loop alarm keys on: the 3rd
+ * `npm test` of a long, healthy edit→test cycle is iteration, not a loop; three
+ * identical calls with nothing in between is a loop. Counting session-wide
+ * repeats made the alarm fire on the healthiest pattern an agent has, and then
+ * on every later occurrence, teaching the model to discount the channel.
+ */
+export function countTrailingSameHash(
+  db: SqlDb,
+  sessionId: string,
+  inputHash: string,
+): number {
+  // A streak longer than 50 identical calls is already far past any sane
+  // threshold; capping the scan keeps the hot post-tool path cheap.
+  const rows = db
+    .prepare(
+      `SELECT input_hash FROM tool_calls WHERE session_id = ? ORDER BY seq DESC LIMIT 50`,
+    )
+    .all(sessionId) as { input_hash: string }[];
+  let streak = 0;
+  for (const r of rows) {
+    if (r.input_hash !== inputHash) break;
+    streak++;
+  }
+  return streak;
+}
+
 export function finalizeSession(
   db: SqlDb,
   sessionId: string,

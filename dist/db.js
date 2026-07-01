@@ -5,6 +5,7 @@ exports.openDbReadOnly = openDbReadOnly;
 exports.upsertSessionStart = upsertSessionStart;
 exports.insertToolCall = insertToolCall;
 exports.countSameHash = countSameHash;
+exports.countTrailingSameHash = countTrailingSameHash;
 exports.finalizeSession = finalizeSession;
 exports.insertOutcome = insertOutcome;
 const paths_1 = require("./paths");
@@ -141,6 +142,28 @@ function countSameHash(db, sessionId, inputHash) {
         .prepare(`SELECT COUNT(*) AS c FROM tool_calls WHERE session_id = ? AND input_hash = ?`)
         .get(sessionId, inputHash);
     return row?.c ?? 0;
+}
+/**
+ * Length of the CONSECUTIVE trailing streak of this input_hash in the session.
+ * This — not the all-session count — is what the loop alarm keys on: the 3rd
+ * `npm test` of a long, healthy edit→test cycle is iteration, not a loop; three
+ * identical calls with nothing in between is a loop. Counting session-wide
+ * repeats made the alarm fire on the healthiest pattern an agent has, and then
+ * on every later occurrence, teaching the model to discount the channel.
+ */
+function countTrailingSameHash(db, sessionId, inputHash) {
+    // A streak longer than 50 identical calls is already far past any sane
+    // threshold; capping the scan keeps the hot post-tool path cheap.
+    const rows = db
+        .prepare(`SELECT input_hash FROM tool_calls WHERE session_id = ? ORDER BY seq DESC LIMIT 50`)
+        .all(sessionId);
+    let streak = 0;
+    for (const r of rows) {
+        if (r.input_hash !== inputHash)
+            break;
+        streak++;
+    }
+    return streak;
 }
 function finalizeSession(db, sessionId, endedIso, outcome, totalTokens, totalCost) {
     withRetry(() => db

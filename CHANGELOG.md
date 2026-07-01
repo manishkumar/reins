@@ -6,6 +6,32 @@ All notable changes to `reins` are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Guard `--ask`: the middle hardness.** `reins guard add bash "git push" --ask`
+  escalates instead of hard-denying — Claude Code pauses and shows *you* the
+  action with your rule's reason (`PreToolUse` → `permissionDecision: "ask"`).
+  For actions that are sometimes fine (pushes, prod-adjacent commands) where a
+  veto is too blunt. Rules without `action` keep hard-denying; existing
+  `guards.json` files are untouched. Note: headless runs have no one to ask, so
+  `ask` behaves like deny there.
+- **Guaranteed steering delivery.** Steering queued after the agent's last tool
+  call used to rot in `.reins/` forever — there was no next tool boundary to
+  land on. The Stop hook now delivers any pending nudge by blocking the stop
+  (`decision: "block"`), so a steer always reaches the agent before the run
+  ends. Consumption makes it self-terminating: the re-stop finds nothing
+  pending and passes through.
+- Gate decisions are recorded with provenance: `DENIED:`/`ASKED:` rows in
+  `runs.db` now carry the rule id (`[guard:rm-rf]`), so `lastrun` and raw SQL
+  show *which* rule stopped a call.
+
+### Changed
+- **Loop alarm counts consecutive repeats, not all-session repeats.** The 3rd
+  `npm test` of a long, healthy edit→test cycle no longer trips it (and then
+  every later run of it); three identical calls *in a row* still do. Fixes the
+  alarm crying wolf on the healthiest pattern an agent has.
+
+## [0.1.0]
+
+### Added
 - Initial public iteration: four Claude Code hook reflexes — steer, guard,
   loop alarm, capture — plus the `reins` CLI (`init`, `steer`, `guard`,
   `lastrun`, `loops`, and `hook` entrypoints).
