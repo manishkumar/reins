@@ -1,14 +1,41 @@
-# reins
+<div align="center">
 
-**Steer a running Claude Code agent without stopping it.** Plus: hard-block forbidden actions, get warned when it loops, and capture every run's trajectory to a queryable SQLite file you own.
+# 🐎 reins
+
+### Steer a running Claude Code agent — without stopping it
+
+Nudge it mid-run · hard-block what it must never do · get warned when it loops · keep every run in a SQLite file you own
+
+[![CI](https://github.com/manishkumar/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/manishkumar/reins/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A5%2018-brightgreen)](#compatibility)
+![Dependencies: zero](https://img.shields.io/badge/runtime%20deps-zero-brightgreen)
+[![Network calls: zero](https://img.shields.io/badge/network%20calls-zero-8a2be2)](#local-first-guarantee)
+
+**[Install](#install) · [60-second start](#60-second-first-run) · [Guards](#guard--the-hard-veto-and-the-escalation) · [The cockpit](#reins-watch--the-multi-agent-cockpit) · [How it works](#how-it-works-one-breath)**
+
+</div>
+
+```text
+# terminal 1 — the agent is mid-task, and you can see it drifting
+  ⏺ Edit(src/login/flow.ts)         ← wait, why is it in the login flow?
+
+# terminal 2 — you, without killing the run
+  $ reins steer "focus on the token refresh path — don't touch the login flow"
+  ✓ queued — lands at the agent's next tool call
+
+# terminal 1 — next tool boundary, same run, context intact
+  ⏺ [reins — live steering from the developer] folded in
+  ⏺ Edit(src/auth/refresh.ts)       ← back on course
+```
 
 Local-first. No daemon. No backend. No account. Nothing leaves your machine.
-
-> Reins guide a galloping horse without stopping it. That's the whole idea: nudge the agent while it runs, veto what it must never do, and keep a record — all from your terminal.
 
 ---
 
 ## Why this exists
+
+> Reins guide a galloping horse without stopping it. That's the whole idea: nudge the agent while it runs, veto what it must never do, and keep a record — all from your terminal.
 
 You're watching an agent work and you can see it drifting — over-engineering, editing the wrong module, about to run something destructive. Today your only options are to let it finish and clean up, or kill it and lose all its in-flight context.
 
@@ -16,10 +43,10 @@ You're watching an agent work and you can see it drifting — over-engineering, 
 
 | When | Reflex | What it does | Hardness |
 |---|---|---|---|
-| **Before** a tool runs | **Guard** | Hard-vetoes forbidden commands/paths (`rm -rf`, writes to `.env`, …) — or escalates to you with `--ask` | Hard veto (deny) / your call (ask) |
-| **During** the run | **Steer** | Injects a one-line course-correction at the next tool boundary | Soft — the model weighs it |
-| **After each** tool | **Loop alarm** | Warns inline when the same call repeats N times in a row | Observe + warn |
-| **At the end** | **Capture** | Logs the run's trajectory + outcome to SQLite | Observe |
+| **Before** a tool runs | ⛔ **Guard** | Hard-vetoes forbidden commands/paths (`rm -rf`, writes to `.env`, …) — or escalates to you with `--ask` | Hard veto (deny) / your call (ask) |
+| **During** the run | ✎ **Steer** | Injects a one-line course-correction at the next tool boundary | Soft — the model weighs it |
+| **After each** tool | ⟳ **Loop alarm** | Warns inline when the same call repeats N times in a row | Observe + warn |
+| **At the end** | ▶ **Capture** | Logs the run's trajectory + outcome to SQLite | Observe |
 
 The steering is the headline. The SQLite log is a **byproduct** — you never have to open it for the tool to earn its place.
 
@@ -36,12 +63,15 @@ reins version
 
 > Once it's published to the npm registry, `npm install -g reins` will be the one-liner. Both put the same `reins` on your PATH.
 
-Prefer a local checkout (for hacking on it)?
+<details>
+<summary>Prefer a local checkout (for hacking on it)?</summary>
 
 ```bash
 git clone https://github.com/manishkumar/reins && cd reins
 npm install && npm run build && npm link
 ```
+
+</details>
 
 Requires **Node ≥ 18**. (Capture uses SQLite — built in on Node ≥ 22.5, optional on older Node; see [Compatibility](#compatibility). Steering and guards work on any Node ≥ 18.)
 
@@ -54,7 +84,7 @@ cd your-project
 reins init          # creates .reins/ AND wires the hooks into .claude/settings.json
 ```
 
-`reins init` now does the wiring for you — it merges the three hooks (`PreToolUse`, `PostToolUse`, `Stop`) into `.claude/settings.json` (creating it if needed, never clobbering existing settings). Then **restart Claude Code in this project** so it loads them.
+`reins init` does the wiring for you — it merges the three hooks (`PreToolUse`, `PostToolUse`, `Stop`) into `.claude/settings.json` (creating it if needed, never clobbering existing settings). Then **restart Claude Code in this project** so it loads them.
 
 Prefer to paste it yourself? `reins init --print` prints the block instead. Want it in `settings.local.json` (not committed)? `reins init --local`.
 
@@ -137,7 +167,7 @@ Tune the threshold in `.reins/config.json` (`"loopThreshold"`).
 
 The daily *"what the hell did it just do"* commands. A clean, scannable account of a run — like a `git diff` for agent behavior.
 
-```
+```text
 $ reins lastrun
 reins · last run
   session  3b9f2a1c-…
@@ -170,7 +200,7 @@ Summary
 
 `reins sessions` is a snapshot; **`reins watch` is the live view.** A self-refreshing dashboard of every agent in the repo — each one's last tool call, whether it's **active / idle / looping right now**, and any steering already queued for it — built for the case a built-in queued message can't serve: **aiming a nudge at one of several running agents without alt-tabbing into its window.**
 
-```
+```text
 $ reins watch
 reins · watch  myproject   14:22:31 · every 2s · loop≥3
   broadcast steer queued: "keep it minimal"
@@ -230,7 +260,10 @@ Don't want any log at all? Set `REINS_NO_SQLITE=1` — capture is fully disabled
 
 ## Testing the hooks manually
 
-The hooks read the Claude Code event JSON on **stdin** and reply on stdout. You can exercise them by hand — useful for trying out a guard or steering rule without a live run:
+<details>
+<summary>The hooks read the Claude Code event JSON on <b>stdin</b> and reply on stdout — you can exercise them by hand. <i>(expand)</i></summary>
+
+Useful for trying out a guard or steering rule without a live run:
 
 ```bash
 # Will this command be blocked?
@@ -249,6 +282,8 @@ echo '{"session_id":"demo","tool_name":"Bash","tool_input":{"command":"npm test"
 Useful fields per event: `session_id`, `cwd`, `tool_name`, `tool_input` (pre/post); `tool_response` (post); `transcript_path`, `reason` (stop). No output from a hook = "allow, inject nothing."
 
 Two notes for manual testing: events **without** a `session_id` don't get recorded (so quick guard/steer checks won't litter your trajectory log); and a session you record by hand will show as "still running" in `reins lastrun` until you also send a `stop` event for it.
+
+</details>
 
 ---
 
@@ -285,7 +320,7 @@ A crashing hook **fails open** (the agent proceeds) so a bug in `reins` can neve
 
 ## Command reference
 
-```
+```text
 reins init [--print|--local]     Set up .reins/ and wire (or print) the hooks
 reins uninstall [--purge]        Remove the hooks (--purge also drops .reins/)
 reins doctor                     Diagnose your setup
@@ -308,6 +343,12 @@ Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on s
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Keep it small and sharp.
 
-## License
+---
 
-MIT
+<div align="center">
+
+MIT · no daemon, no backend, no account — just hooks, and files you own
+
+*If reins caught something dumb before it happened, consider a ⭐*
+
+</div>
