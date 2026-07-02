@@ -234,7 +234,12 @@ Read-only over the same `.reins/runs.db`; it never touches a running agent excep
 
 ### `reins report` — the captured runs as a local web page
 
-`watch` is the live view; **`reins report` is the browsable archive.** It reads `.reins/runs.db` and writes a single **self-contained HTML file** (inline CSS, no JS framework, **zero network requests** — nothing leaves your machine) with summary cards (sessions, tool calls, blocked, failed, loops) and every session's full trajectory, with guard-blocks (⛔) and loops (⟳) marked.
+`watch` is the live view; **`reins report` is the browsable archive.** It reads `.reins/runs.db` and writes a single **self-contained HTML file** (inline CSS, no JS framework, **zero network requests** — nothing leaves your machine) with:
+
+- **Summary cards** — sessions, tool calls, blocked, failed, loops, plus **token and cost rollups** when the transcript had them (best-effort; hidden when never captured).
+- **Per-tool breakdown** — how the calls split across tools (Bash vs Edit vs Read…), with per-tool blocked/failed counts.
+- **Guard-fire heatmap** — which guard rules actually fired, split into denied (⛔) vs escalated-to-you (✋), so you can see which rules earn their keep and which never trigger.
+- **Every session's full trajectory** — guard-blocks (⛔ with the rule id that fired), escalations (✋), failures (✗), and loops (⟳) marked inline.
 
 ```bash
 reins report            # writes .reins/report.html
@@ -242,7 +247,7 @@ reins report --open     # ...and opens it in your browser
 reins report -o /tmp/run.html   # custom path (e.g. to share a single run)
 ```
 
-It's the same local-first deal as the rest of reins: a file you own, readable offline, safe to delete. The richer "what happened across every run" view a terminal can't give you — and the natural home for the deeper insights (cost rollups, guard-fire heatmaps, per-tool breakdowns) as they land.
+It's the same local-first deal as the rest of reins: a file you own, readable offline, safe to delete. The richer "what happened across every run" view a terminal can't give you.
 
 It's all in `.reins/runs.db` — three tables (`sessions`, `tool_calls`, `outcomes`) you can query with raw SQL whenever you want. Token/cost columns are best-effort (read from the session transcript) and may be null; that's harmless.
 

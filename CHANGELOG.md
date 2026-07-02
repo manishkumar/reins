@@ -6,6 +6,14 @@ All notable changes to `reins` are documented here. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **`reins report` deeper insights** (the ones the README promised): **cost/token
+  rollups** (totals card + per-session meta, shown only when the transcript had
+  the data), a **per-tool breakdown** (calls per tool with blocked/failed
+  counts), and a **guard-fire heatmap** (which rules fired, denied ⛔ vs
+  escalated ✋ — which rules earn their keep). Escalated (`ASKED:`) calls now
+  render with their own ✋ glyph instead of raw text, and denied/asked rows show
+  the guard rule id that fired as a chip. Still one self-contained HTML file,
+  inline CSS, zero network.
 - **Guard `--ask`: the middle hardness.** `reins guard add bash "git push" --ask`
   escalates instead of hard-denying — Claude Code pauses and shows *you* the
   action with your rule's reason (`PreToolUse` → `permissionDecision: "ask"`).

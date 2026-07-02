@@ -42,6 +42,8 @@ const store_1 = require("../store");
 const config_1 = require("../config");
 const paths_1 = require("../paths");
 const format_1 = require("./format");
+/** DENIED/ASKED rows carry the rule that stopped them: "… [guard:<id>]". */
+const GUARD_TAG = /\s\[guard:([^\]]+)\]$/;
 function cmdReport(args) {
     const db = (0, db_1.openDbReadOnly)();
     if (!db) {
@@ -64,7 +66,7 @@ function cmdReport(args) {
 }
 function collect(db, repo, threshold) {
     const sessionRows = db
-        .prepare(`SELECT s.id, s.started, s.ended, s.final_outcome,
+        .prepare(`SELECT s.id, s.started, s.ended, s.final_outcome, s.total_tokens, s.total_cost,
               COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
          FROM sessions s
          LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -72,7 +74,17 @@ function collect(db, repo, threshold) {
         ORDER BY COALESCE(MAX(t.ts), s.started) DESC`)
         .all();
     const sessions = [];
-    const totals = { sessions: 0, calls: 0, blocked: 0, failed: 0, loops: 0 };
+    const totals = {
+        sessions: 0,
+        calls: 0,
+        blocked: 0,
+        failed: 0,
+        loops: 0,
+        tokens: null,
+        cost: null,
+    };
+    const toolStats = new Map();
+    const guardStats = new Map();
     for (const s of sessionRows) {
         const callRows = db
             .prepare(`SELECT tool, input_summary, input_hash, ok FROM tool_calls WHERE session_id = ? ORDER BY seq ASC`)
@@ -85,16 +97,42 @@ function collect(db, repo, threshold) {
         let failed = 0;
         const trajectory = callRows.map((cr) => {
             const denied = cr.input_summary.startsWith("DENIED: ");
+            const asked = cr.input_summary.startsWith("ASKED: ");
+            let summary = denied || asked ? cr.input_summary.replace(/^(DENIED|ASKED): /, "") : cr.input_summary;
+            let ruleId = null;
+            if (denied || asked) {
+                const m = summary.match(GUARD_TAG);
+                if (m) {
+                    ruleId = m[1];
+                    summary = summary.slice(0, -m[0].length);
+                }
+                const g = guardStats.get(ruleId ?? "(unknown)") ?? { ruleId: ruleId ?? "(unknown)", denied: 0, asked: 0 };
+                if (denied)
+                    g.denied++;
+                else
+                    g.asked++;
+                guardStats.set(g.ruleId, g);
+            }
+            const failedCall = !denied && !asked && cr.ok === 0;
             if (denied)
                 blocked++;
-            else if (cr.ok === 0)
+            else if (failedCall)
                 failed++;
+            const t = toolStats.get(cr.tool) ?? { tool: cr.tool, calls: 0, denied: 0, failed: 0 };
+            t.calls++;
+            if (denied)
+                t.denied++;
+            if (failedCall)
+                t.failed++;
+            toolStats.set(cr.tool, t);
             return {
                 tool: cr.tool,
-                summary: denied ? cr.input_summary.slice(8) : cr.input_summary,
+                summary,
                 denied,
-                failed: !denied && cr.ok === 0,
+                asked,
+                failed: failedCall,
                 looped: loopHashes.has(cr.input_hash),
+                ruleId,
             };
         });
         const durationMs = s.started && (s.ended || s.last_ts)
@@ -109,6 +147,8 @@ function collect(db, repo, threshold) {
             blocked,
             loops: loopHashes.size,
             durationMs: Number.isFinite(durationMs) ? durationMs : null,
+            tokens: s.total_tokens,
+            cost: s.total_cost,
             trajectory,
         });
         totals.sessions++;
@@ -116,18 +156,26 @@ function collect(db, repo, threshold) {
         totals.blocked += blocked;
         totals.failed += failed;
         totals.loops += loopHashes.size;
+        if (s.total_tokens != null)
+            totals.tokens = (totals.tokens ?? 0) + s.total_tokens;
+        if (s.total_cost != null)
+            totals.cost = (totals.cost ?? 0) + s.total_cost;
     }
-    return { repo, generatedIso: new Date().toISOString(), threshold, totals, sessions };
+    const tools = [...toolStats.values()].sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool));
+    const guardFires = [...guardStats.values()].sort((a, b) => b.denied + b.asked - (a.denied + a.asked) || a.ruleId.localeCompare(b.ruleId));
+    return { repo, generatedIso: new Date().toISOString(), threshold, totals, tools, guardFires, sessions };
 }
 /** Pure: structured report data → a single self-contained HTML document. */
 function renderReportHtml(d) {
     const repoName = path.basename(d.repo) || d.repo;
     const cards = [
-        card("sessions", d.totals.sessions),
-        card("tool calls", d.totals.calls),
-        card("blocked", d.totals.blocked, d.totals.blocked > 0 ? "bad" : ""),
-        card("failed", d.totals.failed, d.totals.failed > 0 ? "warn" : ""),
-        card("loops", d.totals.loops, d.totals.loops > 0 ? "warn" : ""),
+        card("sessions", String(d.totals.sessions)),
+        card("tool calls", String(d.totals.calls)),
+        card("blocked", String(d.totals.blocked), d.totals.blocked > 0 ? "bad" : ""),
+        card("failed", String(d.totals.failed), d.totals.failed > 0 ? "warn" : ""),
+        card("loops", String(d.totals.loops), d.totals.loops > 0 ? "warn" : ""),
+        d.totals.tokens != null ? card("tokens", fmtTokens(d.totals.tokens)) : "",
+        d.totals.cost != null ? card("est. cost", fmtCost(d.totals.cost)) : "",
     ].join("");
     const sessions = d.sessions.length
         ? d.sessions.map(sessionSection).join("\n")
@@ -153,6 +201,19 @@ h1 .repo { color: #58a6ff; }
 .card .n { font-size: 24px; font-weight: 700; }
 .card .l { color: #7d8590; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 .card.bad .n { color: #ff7b72; } .card.warn .n { color: #e3b341; }
+section.insight { background: #161b22; border: 1px solid #232b35; border-radius: 10px;
+  margin-bottom: 28px; padding: 14px 16px; }
+section.insight h2 { font-size: 13px; margin: 0 0 10px; color: #7d8590;
+  text-transform: uppercase; letter-spacing: .06em; }
+.brow { display: grid; grid-template-columns: 140px 1fr 160px; gap: 10px;
+  align-items: center; padding: 3px 0; }
+.brow .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brow .track { background: #0e1116; border-radius: 4px; height: 12px; overflow: hidden; }
+.brow .bar { height: 100%; background: #2f6feb; border-radius: 4px; min-width: 2px; }
+.brow.guard .bar { background: #b62324; }
+.brow .cnt { color: #7d8590; font-size: 12px; text-align: right; }
+.brow .cnt .deny { color: #ff7b72; } .brow .cnt .ask { color: #e3b341; }
+.brow .cnt .fail { color: #e3b341; }
 details.session { background: #161b22; border: 1px solid #232b35; border-radius: 10px;
   margin-bottom: 12px; overflow: hidden; }
 details.session > summary { cursor: pointer; padding: 12px 16px; list-style: none;
@@ -171,7 +232,11 @@ details.session > summary::-webkit-details-marker { display: none; }
 .row .sum { white-space: pre-wrap; word-break: break-word; }
 .g { text-align: center; }
 .g.ok { color: #3fb950; } .g.deny { color: #ff7b72; } .g.fail { color: #e3b341; }
+.g.ask { color: #e3b341; }
 .row.deny .sum { color: #ff7b72; } .row.fail .sum { color: #e3b341; }
+.row.ask .sum { color: #e3b341; }
+.rule { font-size: 11px; color: #7d8590; border: 1px solid #232b35;
+  border-radius: 20px; padding: 1px 7px; margin-left: 6px; white-space: nowrap; }
 .loop { color: #e3b341; }
 .empty { color: #7d8590; }
 footer { margin-top: 28px; color: #586069; font-size: 11.5px; }
@@ -182,11 +247,51 @@ footer { margin-top: 28px; color: #586069; font-size: 11.5px; }
 <h1>reins report · <span class="repo">${esc(repoName)}</span></h1>
 <p class="sub">${esc(d.repo)} · generated ${esc(d.generatedIso)} · loop threshold ${d.threshold}× · 100% local, no data left this machine</p>
 <div class="cards">${cards}</div>
+${toolBreakdownSection(d.tools ?? [])}
+${guardHeatmapSection(d.guardFires ?? [])}
 ${sessions}
 <footer>Generated by <strong>reins report</strong> from .reins/runs.db — a self-contained file you own. Re-run to refresh.</footer>
 </div>
 </body>
 </html>`;
+}
+/** Per-tool breakdown: one bar per tool, width relative to the busiest tool. */
+function toolBreakdownSection(tools) {
+    if (!tools.length)
+        return "";
+    const max = Math.max(...tools.map((t) => t.calls));
+    const rows = tools
+        .map((t) => {
+        const pct = Math.max(1, Math.round((t.calls / max) * 100));
+        const extras = [];
+        if (t.denied)
+            extras.push(`<span class="deny">${t.denied} blocked</span>`);
+        if (t.failed)
+            extras.push(`<span class="fail">${t.failed} failed</span>`);
+        const cnt = `${t.calls}${extras.length ? " · " + extras.join(" · ") : ""}`;
+        return `<div class="brow"><span class="name">${esc(t.tool)}</span><span class="track"><span class="bar" style="width:${pct}%"></span></span><span class="cnt">${cnt}</span></div>`;
+    })
+        .join("");
+    return `<section class="insight"><h2>By tool</h2>${rows}</section>`;
+}
+/** Guard-fire heatmap: which rules are actually earning their keep. */
+function guardHeatmapSection(fires) {
+    if (!fires.length)
+        return "";
+    const max = Math.max(...fires.map((f) => f.denied + f.asked));
+    const rows = fires
+        .map((f) => {
+        const total = f.denied + f.asked;
+        const pct = Math.max(1, Math.round((total / max) * 100));
+        const parts = [];
+        if (f.denied)
+            parts.push(`<span class="deny">⛔ ${f.denied} denied</span>`);
+        if (f.asked)
+            parts.push(`<span class="ask">✋ ${f.asked} asked</span>`);
+        return `<div class="brow guard"><span class="name">${esc(f.ruleId)}</span><span class="track"><span class="bar" style="width:${pct}%"></span></span><span class="cnt">${parts.join(" · ")}</span></div>`;
+    })
+        .join("");
+    return `<section class="insight"><h2>Guard fires</h2>${rows}</section>`;
 }
 function sessionSection(s) {
     const status = s.ended ? s.outcome || "ended" : "running";
@@ -194,6 +299,10 @@ function sessionSection(s) {
     const bits = [`${s.calls} calls`];
     if (s.durationMs != null)
         bits.push(humanDuration(s.durationMs));
+    if (s.tokens != null)
+        bits.push(`${fmtTokens(s.tokens)} tok`);
+    if (s.cost != null)
+        bits.push(fmtCost(s.cost));
     if (s.blocked)
         bits.push(`${s.blocked} blocked`);
     if (s.loops)
@@ -212,13 +321,24 @@ function sessionSection(s) {
 </details>`;
 }
 function trajRow(call) {
-    const kind = call.denied ? "deny" : call.failed ? "fail" : "ok";
-    const glyph = call.denied ? "⛔" : call.failed ? "✗" : "•";
+    const kind = call.denied ? "deny" : call.asked ? "ask" : call.failed ? "fail" : "ok";
+    const glyph = call.denied ? "⛔" : call.asked ? "✋" : call.failed ? "✗" : "•";
     const loop = call.looped ? ` <span class="loop">⟳</span>` : "";
-    return `<div class="row ${kind}"><span class="g ${kind}">${glyph}</span><span class="tool">${esc(call.tool)}</span><span class="sum">${esc(call.summary)}${loop}</span></div>`;
+    const rule = call.ruleId ? ` <span class="rule">guard:${esc(call.ruleId)}</span>` : "";
+    return `<div class="row ${kind}"><span class="g ${kind}">${glyph}</span><span class="tool">${esc(call.tool)}</span><span class="sum">${esc(call.summary)}${rule}${loop}</span></div>`;
 }
 function card(label, n, cls = "") {
-    return `<div class="card ${cls}"><div class="n">${n}</div><div class="l">${esc(label)}</div></div>`;
+    return `<div class="card ${cls}"><div class="n">${esc(n)}</div><div class="l">${esc(label)}</div></div>`;
+}
+/** 128540 → "128,540"; 3200000 → "3.2M". Locale-independent (report is a stable artifact). */
+function fmtTokens(n) {
+    if (n >= 1_000_000)
+        return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+    return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+/** Costs are small; keep cents visible but don't pretend at sub-cent precision. */
+function fmtCost(n) {
+    return n < 0.01 && n > 0 ? "<$0.01" : `$${n.toFixed(2)}`;
 }
 function esc(s) {
     return s
