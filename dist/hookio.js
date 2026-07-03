@@ -4,6 +4,7 @@
 // JSON object and exits 0. No output = passthrough/allow.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.emitDeny = emitDeny;
+exports.emitAllow = emitAllow;
 exports.emitAsk = emitAsk;
 exports.emitPreToolContext = emitPreToolContext;
 exports.emitPostToolContext = emitPostToolContext;
@@ -13,6 +14,19 @@ function emitDeny(reason) {
         hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: "deny",
+            permissionDecisionReason: reason,
+        },
+    }));
+}
+/** Explicitly allow, bypassing Claude Code's own permission prompt for this
+ *  call. Only used when a human already signed off out-of-band — i.e. a
+ *  one-shot `reins approve` allowance for this exact input. Asking again in
+ *  the TUI would double-charge the human for the same decision. */
+function emitAllow(reason) {
+    process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "allow",
             permissionDecisionReason: reason,
         },
     }));

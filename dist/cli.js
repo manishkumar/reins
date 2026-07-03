@@ -52,6 +52,18 @@ async function main() {
             const { cmdGuard } = await Promise.resolve().then(() => __importStar(require("./commands/guard")));
             return cmdGuard(rest);
         }
+        case "pending": {
+            const { cmdPending } = await Promise.resolve().then(() => __importStar(require("./commands/pending")));
+            return cmdPending();
+        }
+        case "approve": {
+            const { cmdApprove } = await Promise.resolve().then(() => __importStar(require("./commands/pending")));
+            return cmdApprove(rest);
+        }
+        case "deny": {
+            const { cmdDeny } = await Promise.resolve().then(() => __importStar(require("./commands/pending")));
+            return cmdDeny(rest);
+        }
         case "lastrun": {
             const { cmdLastrun } = await Promise.resolve().then(() => __importStar(require("./commands/lastrun")));
             return cmdLastrun(rest);
@@ -159,8 +171,12 @@ USAGE
   reins guard add bash "<regex>"   Block matching Bash commands
   reins guard add path "<glob>"    Block writes to matching paths (e.g. **/.env)
   reins guard add ... --ask        Escalate to you (permission prompt) instead of denying
+  reins guard add ... --hold       Park for async approval instead of denying
   reins guard remove <id>          Remove a guard
   reins guard reset                Restore default guards
+  reins pending                    List actions parked by hold rules
+  reins approve <id>               Approve a parked action (one-shot, exact input)
+  reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead
   reins lastrun [session-prefix]   Readable account of the most recent run
   reins sessions                   List recent sessions in this project
   reins watch                      Live cockpit: all agents, steer any one
@@ -172,7 +188,9 @@ HOOK ENTRYPOINTS (wired via .claude/settings.json — see \`reins init\`)
 
 Steering is a soft nudge the model weighs — think "the detail you forgot to put
 in the original prompt", not "an order that overrides it". For a hard "never",
-use a guard; for a "check with me first", use a guard with --ask.`);
+use a guard; for a "check with me first", use a guard with --ask; for a
+"check with me first" while you're NOT at the terminal, use --hold and review
+the queue later with reins pending / approve / deny.`);
 }
 main()
     .then((code) => process.exit(code))

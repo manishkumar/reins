@@ -3,9 +3,26 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0]
 
 ### Added
+- **The hold queue: `--hold`, `reins pending`, `reins approve`, `reins deny`.**
+  The third guard hardness, for the run nobody is watching. A rule added with
+  `--hold` doesn't kill the agent's attempt against a wall — it **parks** the
+  proposed action (full input, rule, session) in `.reins/pending/`, denies that
+  attempt with a reason that hands the agent the queue id and tells it to
+  continue with other work, and waits for you. `reins pending` lists the queue;
+  `reins approve <id>` writes a **one-shot allowance keyed on the exact input
+  hash** (the identical retry passes once — a *changed* retry is a new
+  proposal, by design) and steers the session to retry; `reins deny <id>
+  [--steer "do this instead"]` refuses, optionally steering the alternative.
+  Queue state is plain files, not SQLite, so the gate works even where capture
+  can't — and alone in reins, hold **biases closed**: if parking itself fails,
+  the call is still denied. Sessions that end with parked actions say so in
+  `lastrun` / `sessions` (⏳ awaiting approval), `doctor` shows the queue, and
+  the audit trail records `HELD:` / `APPROVED:` / `REFUSED:` rows with rule and
+  hold ids.
+
 - **`reins report` deeper insights** (the ones the README promised): **cost/token
   rollups** (totals card + per-session meta, shown only when the transcript had
   the data), a **per-tool breakdown** (calls per tool with blocked/failed

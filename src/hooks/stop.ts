@@ -61,7 +61,18 @@ export async function runStop(): Promise<void> {
 
     const totals = readTranscriptTotals(transcriptPath);
     finalizeSession(db, sessionId, nowIso(), outcome, totals.totalTokens, totals.totalCost);
-    insertOutcome(db, sessionId, outcome, null /* gate_result: reserved */);
+    // gate_result: if the run ends with actions still parked in the hold
+    // queue, say so in the archive — "ended with 2 actions awaiting approval"
+    // is the headline fact about an unattended run.
+    let gateResult: string | null = null;
+    try {
+      const { pendingForSession } = require("../holds") as typeof import("../holds");
+      const held = pendingForSession(cwd, sessionId).length;
+      if (held > 0) gateResult = `holds-pending:${held}`;
+    } catch {
+      /* best-effort */
+    }
+    insertOutcome(db, sessionId, outcome, gateResult);
   } catch (e) {
     process.stderr.write("[reins] stop capture failed: " + String(e) + "\n");
   }

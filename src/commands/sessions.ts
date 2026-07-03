@@ -1,5 +1,6 @@
 import { openDbReadOnly } from "../db";
 import { capabilityNote } from "../store";
+import { listPending } from "../holds";
 import { c } from "./format";
 
 interface Row {
@@ -37,6 +38,17 @@ export function cmdSessions(args: string[]): number {
     return 0;
   }
 
+  // Live hold-queue counts per session, so a run that ended with parked
+  // actions is visibly waiting on YOU, right in the list.
+  const holdCounts = new Map<string, number>();
+  try {
+    for (const p of listPending()) {
+      holdCounts.set(p.session_id, (holdCounts.get(p.session_id) ?? 0) + 1);
+    }
+  } catch {
+    /* queue unreadable — show sessions without chips */
+  }
+
   console.log(c.bold(`Recent sessions `) + c.dim(`(most recent first, max ${limit})`));
   console.log("");
   for (const r of rows) {
@@ -44,12 +56,15 @@ export function cmdSessions(args: string[]): number {
       ? c.green(r.final_outcome || "ended")
       : c.yellow("running");
     const when = (r.last_ts || r.started || "").replace("T", " ").replace(/\..*/, "");
+    const holds = holdCounts.get(r.id);
+    const holdChip = holds ? c.cyan(`  ⏳ ${holds} awaiting approval`) : "";
     console.log(
-      `  ${c.cyan(shortId(r.id))}  ${status.padEnd(20)} ${c.dim(`${r.calls} calls`)}  ${c.dim(when)}`,
+      `  ${c.cyan(shortId(r.id))}  ${status.padEnd(20)} ${c.dim(`${r.calls} calls`)}  ${c.dim(when)}${holdChip}`,
     );
   }
   console.log("");
   console.log(c.dim("Full trajectory of one:  reins lastrun <session-id>"));
+  if (holdCounts.size > 0) console.log(c.dim("Review parked actions:   reins pending"));
   return 0;
 }
 

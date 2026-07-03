@@ -5,6 +5,7 @@ import { getDriver, capabilityNote } from "../store";
 import { loadGuards } from "../guards";
 import { loadConfig } from "../config";
 import { peekSteering } from "../steering";
+import { listPending } from "../holds";
 import { c } from "./format";
 
 const OK = c.green("✓");
@@ -48,6 +49,12 @@ export function cmdDoctor(): number {
     line(OK, "loop threshold", String(loadConfig().loopThreshold));
     const pending = peekSteering();
     line(pending ? WARN : OK, "pending steering", pending ? `"${pending}"` : "none");
+    const holds = listPending().length;
+    line(
+      holds > 0 ? WARN : OK,
+      "pending holds",
+      holds > 0 ? `${holds} awaiting approval — reins pending` : "none",
+    );
   } else {
     problems++;
     line(WARN, ".reins dir", "not initialized — run `reins init`");

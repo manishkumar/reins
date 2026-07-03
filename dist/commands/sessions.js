@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdSessions = cmdSessions;
 const db_1 = require("../db");
 const store_1 = require("../store");
+const holds_1 = require("../holds");
 const format_1 = require("./format");
 /** List recent sessions in this project — useful when several agents have run. */
 function cmdSessions(args) {
@@ -25,6 +26,17 @@ function cmdSessions(args) {
         console.log(format_1.c.dim("No sessions recorded yet."));
         return 0;
     }
+    // Live hold-queue counts per session, so a run that ended with parked
+    // actions is visibly waiting on YOU, right in the list.
+    const holdCounts = new Map();
+    try {
+        for (const p of (0, holds_1.listPending)()) {
+            holdCounts.set(p.session_id, (holdCounts.get(p.session_id) ?? 0) + 1);
+        }
+    }
+    catch {
+        /* queue unreadable — show sessions without chips */
+    }
     console.log(format_1.c.bold(`Recent sessions `) + format_1.c.dim(`(most recent first, max ${limit})`));
     console.log("");
     for (const r of rows) {
@@ -32,10 +44,14 @@ function cmdSessions(args) {
             ? format_1.c.green(r.final_outcome || "ended")
             : format_1.c.yellow("running");
         const when = (r.last_ts || r.started || "").replace("T", " ").replace(/\..*/, "");
-        console.log(`  ${format_1.c.cyan(shortId(r.id))}  ${status.padEnd(20)} ${format_1.c.dim(`${r.calls} calls`)}  ${format_1.c.dim(when)}`);
+        const holds = holdCounts.get(r.id);
+        const holdChip = holds ? format_1.c.cyan(`  ⏳ ${holds} awaiting approval`) : "";
+        console.log(`  ${format_1.c.cyan(shortId(r.id))}  ${status.padEnd(20)} ${format_1.c.dim(`${r.calls} calls`)}  ${format_1.c.dim(when)}${holdChip}`);
     }
     console.log("");
     console.log(format_1.c.dim("Full trajectory of one:  reins lastrun <session-id>"));
+    if (holdCounts.size > 0)
+        console.log(format_1.c.dim("Review parked actions:   reins pending"));
     return 0;
 }
 function shortId(id) {

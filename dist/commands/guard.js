@@ -62,10 +62,10 @@ function list() {
         console.log(format_1.c.dim("No guard rules. (Add one: reins guard add bash '<regex>')"));
         return 0;
     }
-    console.log(format_1.c.bold("Guard rules — deny is a hard veto; ask escalates to you:"));
+    console.log(format_1.c.bold("Guard rules — deny is a hard veto; ask escalates to you; hold parks for later:"));
     for (const r of guards.rules) {
         const tag = r.type === "bash" ? format_1.c.magenta("bash ") : format_1.c.blue("path ");
-        const action = r.action === "ask" ? format_1.c.yellow("ask ") : format_1.c.red("deny");
+        const action = r.action === "ask" ? format_1.c.yellow("ask ") : r.action === "hold" ? format_1.c.cyan("hold") : format_1.c.red("deny");
         console.log(`  ${format_1.c.dim(r.id.padEnd(20))} ${tag} ${action} ${format_1.c.cyan(r.pattern)}`);
         console.log(`  ${" ".repeat(20)}            ${format_1.c.dim(r.reason)}`);
     }
@@ -74,14 +74,20 @@ function list() {
 function add(args) {
     const type = args[0];
     if (type !== "bash" && type !== "path") {
-        console.error(format_1.c.red("Usage: reins guard add <bash|path> <pattern> [--ask] [--reason \"...\"]"));
+        console.error(format_1.c.red("Usage: reins guard add <bash|path> <pattern> [--ask|--hold] [--reason \"...\"]"));
         console.error(format_1.c.dim("  bash <regex>  matches the command of a Bash tool call"));
         console.error(format_1.c.dim("  path <glob>   matches file paths (e.g. **/.env, secrets/**)"));
         console.error(format_1.c.dim("  --ask         escalate to you (permission prompt) instead of hard-denying"));
+        console.error(format_1.c.dim("  --hold        park the action for async approval (reins pending/approve/deny)"));
         return 1;
     }
     const ask = args.includes("--ask");
-    args = args.filter((a) => a !== "--ask");
+    const hold = args.includes("--hold");
+    args = args.filter((a) => a !== "--ask" && a !== "--hold");
+    if (ask && hold) {
+        console.error(format_1.c.red("Pick one hardness: --ask (interactive prompt) or --hold (async queue)."));
+        return 1;
+    }
     const reasonIdx = args.findIndex((a) => a === "--reason" || a === "-r");
     let reason = "";
     let patternParts = args.slice(1);
@@ -117,19 +123,26 @@ function add(args) {
     }
     if (!reason) {
         const subject = type === "bash" ? `Command matching /${pattern}/` : `Touching ${pattern}`;
-        reason = ask
-            ? `${subject} needs your approval (reins guard).`
-            : `${subject} is blocked by a reins guard.`;
+        reason =
+            ask || hold
+                ? `${subject} needs your approval (reins guard).`
+                : `${subject} is blocked by a reins guard.`;
     }
     const guards = (0, guards_1.loadGuards)();
     const id = makeId(type, pattern, guards.rules.map((r) => r.id));
     const rule = { id, type, pattern, reason };
     if (ask)
         rule.action = "ask"; // absent = deny; keeps pre-0.2 files byte-stable
+    if (hold)
+        rule.action = "hold";
     guards.rules.push(rule);
     (0, guards_1.saveGuards)(guards);
-    console.log(format_1.c.green(`✓ Added guard ${format_1.c.bold(id)}`) + (ask ? format_1.c.yellow(" (ask)") : ""));
+    console.log(format_1.c.green(`✓ Added guard ${format_1.c.bold(id)}`) +
+        (ask ? format_1.c.yellow(" (ask)") : hold ? format_1.c.cyan(" (hold)") : ""));
     console.log(`  ${rule.type} ${format_1.c.cyan(rule.pattern)} — ${format_1.c.dim(rule.reason)}`);
+    if (hold) {
+        console.log(format_1.c.dim("  Matching actions will park in the queue: reins pending / approve / deny"));
+    }
     return 0;
 }
 function remove(args) {

@@ -43,7 +43,7 @@ You're watching an agent work and you can see it drifting — over-engineering, 
 
 | When | Reflex | What it does | Hardness |
 |---|---|---|---|
-| **Before** a tool runs | ⛔ **Guard** | Hard-vetoes forbidden commands/paths (`rm -rf`, writes to `.env`, …) — or escalates to you with `--ask` | Hard veto (deny) / your call (ask) |
+| **Before** a tool runs | ⛔ **Guard** | Hard-vetoes forbidden commands/paths (`rm -rf`, writes to `.env`, …) — or escalates to you with `--ask`, or **parks the action for your later approval** with `--hold` | Hard veto (deny) / your call (ask) / your call, later (hold) |
 | **During** the run | ✎ **Steer** | Injects a one-line course-correction at the next tool boundary | Soft — the model weighs it |
 | **After each** tool | ⟳ **Loop alarm** | Warns inline when the same call repeats N times in a row | Observe + warn |
 | **At the end** | ▶ **Capture** | Logs the run's trajectory + outcome to SQLite | Observe |
@@ -132,11 +132,36 @@ reins guard add bash "psql.*production"       # block a command pattern (regex)
 reins guard add path "infra/**"               # block writes to paths (glob)
 reins guard add bash "docker .*--privileged" --reason "no privileged containers"
 reins guard add bash "git push" --ask         # escalate to YOU instead of denying
+reins guard add bash "npm publish" --hold     # park for your LATER approval
 reins guard remove <id>                       # ids shown by `guard list`
 reins guard reset                             # back to defaults
 ```
 
 **`--ask` is the middle hardness.** Some actions aren't *never* — they're *check with me first* (pushes, prod-adjacent commands, package publishes). An `ask` rule doesn't veto; it makes Claude Code pause and show **you** the exact call with your rule's reason, and you approve or deny it in the moment (`permissionDecision: "ask"`). One thing to know: it needs a human at the terminal — in a headless/non-interactive run there's no one to ask, so `ask` effectively denies there. When you need a wall that holds unconditionally, that's `deny` (the default).
+
+### `--hold` — the approval queue, for the run nobody is watching
+
+`ask` needs you at the terminal. **`hold` is `ask` for the agent that runs while you sleep.** A hold rule doesn't kill the attempt against a wall — it **parks the proposed action** (the full call, verbatim) in a queue, tells the agent *"this is parked for approval (id abc123) — continue with other work"*, and waits for you. The run survives; the action doesn't happen without you.
+
+```bash
+reins guard add bash "git push" --hold        # park pushes instead of denying
+# ...the agent runs overnight, tries to push, gets parked, keeps working...
+
+reins pending                                 # morning: what did they want to do?
+#   ab12cd34  7h  3b9f2a1c  Bash  git push origin main  [bash-git-push]
+
+reins approve ab12cd34                        # sign off — the agent may retry it
+reins deny ab12cd34 --steer "open a PR instead of pushing to main"
+```
+
+`reins approve` writes a **one-shot allowance for that exact input** and steers the session to retry: the identical call passes once (explicitly allowed, no double prompt), then the rule holds again. Sessions that end with parked actions say so in `reins sessions` / `reins lastrun` (⏳ awaiting approval), and the trajectory records `HELD` / `APPROVED` / `REFUSED` with the rule and queue ids.
+
+The honest caveats, as always:
+
+- **Approval is by exact input hash.** A *changed* retry — even by one flag — is a new proposal that parks again. That's the design, not a gap: you approved a specific action, not a general permission.
+- **Same machine, same repo.** The queue is files in `.reins/` (`pending/`, `allowed/`); there's no server, so you review from a terminal on the same checkout. (Remote/notify hook-ups are deliberately out of scope for now.)
+- **Approval doesn't re-run anything.** It permits the retry; a still-running agent is steered to retry, an ended one simply passes the gate next time the identical call is attempted (e.g. when you re-kick the task).
+- **Hold biases closed — uniquely in reins.** If parking itself fails (say `.reins/` is unwritable), the call is denied outright rather than allowed through. The fail-open caveat still applies one level up: a *crashing* hook process fails open, as everywhere.
 
 Ships with a sane default denylist (override freely): `rm -rf`, `git push --force`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env*` / `.git/**`.
 
@@ -316,6 +341,7 @@ The live reflexes never touch the database, so they work on **any Node ≥ 18**.
 
 - **Do not let an untrusted or automated writer feed it.** A CI job, a shared script, or any process you don't fully control writing to `.reins/steering.txt` is a hijack path into your agent. Treat write access to that file as you'd treat write access to your prompts.
 - Steering is a **soft** channel — the model still weighs it and resists outright contradictions — so this is defense-in-depth, not a sole control. v1 ships no signing on the steering file; the mitigations are filesystem permissions (`0700`) and not pointing untrusted writers at it.
+- **`.reins/allowed/` is approval access.** One-shot hold allowances are files there; anything that can write them can pre-approve a parked action. Same posture, same mitigations.
 
 Guards, separately, are **not** a containment boundary (see *What guards are — and are not*).
 
@@ -331,7 +357,10 @@ reins uninstall [--purge]        Remove the hooks (--purge also drops .reins/)
 reins doctor                     Diagnose your setup
 reins steer "<msg>" [--replace]  Queue steering for the next tool call (appends)
 reins steer [--clear]            Show / clear pending steering
-reins guard list|add|remove|reset    (add takes --ask to escalate, not deny)
+reins guard list|add|remove|reset    (add takes --ask to escalate, --hold to park)
+reins pending                    List actions parked by hold rules
+reins approve <id>               Approve a parked action (one-shot, exact input)
+reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead
 reins lastrun [session-prefix]   Readable account of a run
 reins sessions [-n N]            List recent sessions
 reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one
@@ -342,7 +371,7 @@ reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)
 
 ## How it works (one breath)
 
-Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny or ask) then steering (inject + clear). `post-tool` records the call and raises the loop alarm on consecutive repeats. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run. State lives in `.reins/`: `steering.txt`, `guards.json`, `config.json`, `runs.db`. CLI commands find `.reins/` by walking up from your current directory, so they work from any subdirectory of the project.
+Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny, ask, or hold-with-one-shot-allowance) then steering (inject + clear). `post-tool` records the call and raises the loop alarm on consecutive repeats. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run — noting any actions still parked. State lives in `.reins/`: `steering.txt`, `guards.json`, `pending/`, `allowed/`, `config.json`, `runs.db`. CLI commands find `.reins/` by walking up from your current directory, so they work from any subdirectory of the project.
 
 ## Contributing
 

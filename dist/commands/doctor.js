@@ -41,6 +41,7 @@ const store_1 = require("../store");
 const guards_1 = require("../guards");
 const config_1 = require("../config");
 const steering_1 = require("../steering");
+const holds_1 = require("../holds");
 const format_1 = require("./format");
 const OK = format_1.c.green("✓");
 const WARN = format_1.c.yellow("!");
@@ -80,6 +81,8 @@ function cmdDoctor() {
         line(OK, "loop threshold", String((0, config_1.loadConfig)().loopThreshold));
         const pending = (0, steering_1.peekSteering)();
         line(pending ? WARN : OK, "pending steering", pending ? `"${pending}"` : "none");
+        const holds = (0, holds_1.listPending)().length;
+        line(holds > 0 ? WARN : OK, "pending holds", holds > 0 ? `${holds} awaiting approval — reins pending` : "none");
     }
     else {
         problems++;

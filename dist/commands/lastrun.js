@@ -6,6 +6,7 @@ const store_1 = require("../store");
 const format_1 = require("./format");
 const util_1 = require("../util");
 const config_1 = require("../config");
+const holds_1 = require("../holds");
 function cmdLastrun(args) {
     const db = (0, db_1.openDbReadOnly)();
     if (!db) {
@@ -39,7 +40,30 @@ function cmdLastrun(args) {
     printTrajectory(calls, threshold);
     console.log("");
     printSummary(calls, threshold);
+    printAwaiting(session.id);
     return 0;
+}
+/**
+ * Actions from this session still parked in the hold queue — read live from
+ * .reins/pending (not the DB) so an approve/deny done a minute ago is already
+ * reflected. This is the line the overnight-run user came for.
+ */
+function printAwaiting(sessionId) {
+    let pending;
+    try {
+        pending = (0, holds_1.pendingForSession)(undefined, sessionId);
+    }
+    catch {
+        return;
+    }
+    if (pending.length === 0)
+        return;
+    console.log("");
+    console.log(format_1.c.cyan(`⏳ ${pending.length} action${pending.length === 1 ? "" : "s"} awaiting your approval`) +
+        format_1.c.dim("   reins approve <id> · reins deny <id>"));
+    for (const p of pending) {
+        console.log(`    ${format_1.c.cyan(p.id)}  ${p.tool}  ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}`);
+    }
 }
 function printHeader(s, callCount) {
     const dur = duration(s.started, s.ended);
@@ -68,12 +92,20 @@ function printTrajectory(calls, threshold) {
     for (const call of calls)
         counts.set(call.input_hash, (counts.get(call.input_hash) ?? 0) + 1);
     for (const call of calls) {
-        const denied = call.input_summary.startsWith("DENIED: ");
-        const summary = denied ? call.input_summary.slice("DENIED: ".length) : call.input_summary;
+        const gate = gateDecision(call.input_summary);
+        const summary = gate ? call.input_summary.slice(gate.length + 2) : call.input_summary;
         const looped = (counts.get(call.input_hash) ?? 0) >= threshold;
         let glyph;
-        if (denied)
+        if (gate === "DENIED")
             glyph = format_1.c.red("⛔");
+        else if (gate === "ASKED")
+            glyph = format_1.c.yellow("✋");
+        else if (gate === "HELD")
+            glyph = format_1.c.cyan("⏳");
+        else if (gate === "APPROVED")
+            glyph = format_1.c.green("✓");
+        else if (gate === "REFUSED")
+            glyph = format_1.c.red("✋");
         else if (call.ok === 0)
             glyph = format_1.c.yellow("✗");
         else
@@ -83,24 +115,32 @@ function printTrajectory(calls, threshold) {
         console.log(`  ${glyph} ${tag} ${(0, util_1.truncate)(summary, 92)}${loopMark}`);
     }
 }
+/** The gate-decision prefix of a recorded row, if any ("DENIED", "HELD", …). */
+function gateDecision(summary) {
+    const m = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): /.exec(summary);
+    return m ? m[1] : null;
+}
 function printSummary(calls, threshold) {
     const writes = new Set();
     const commands = [];
     let denied = 0;
+    let held = 0;
     let failed = 0;
     const counts = new Map();
     for (const call of calls) {
-        const isDenied = call.input_summary.startsWith("DENIED: ");
-        const summary = isDenied ? call.input_summary.slice(8) : call.input_summary;
-        if (isDenied)
+        const gate = gateDecision(call.input_summary);
+        const summary = gate ? call.input_summary.slice(gate.length + 2) : call.input_summary;
+        if (gate === "DENIED")
             denied++;
-        else if (call.ok === 0)
+        else if (gate === "HELD")
+            held++;
+        else if (!gate && call.ok === 0)
             failed++;
-        // Only count calls that actually ran — a denied write touched nothing.
-        if (!isDenied && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(call.tool)) {
+        // Only count calls that actually ran — a gated write touched nothing.
+        if (!gate && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(call.tool)) {
             writes.add(summary);
         }
-        if (call.tool === "Bash" && !isDenied)
+        if (call.tool === "Bash" && !gate)
             commands.push(summary);
         const prev = counts.get(call.input_hash);
         counts.set(call.input_hash, { n: (prev?.n ?? 0) + 1, tool: call.tool, summary });
@@ -114,6 +154,8 @@ function printSummary(calls, threshold) {
     console.log(`  ${format_1.c.magenta("commands run")}   ${commands.length}`);
     if (denied > 0)
         console.log(`  ${format_1.c.red("blocked")}        ${denied} ${format_1.c.dim("(guard vetoes)")}`);
+    if (held > 0)
+        console.log(`  ${format_1.c.cyan("parked")}         ${held} ${format_1.c.dim("(hold rules)")}`);
     if (failed > 0)
         console.log(`  ${format_1.c.yellow("failed calls")}   ${failed}`);
     if (loops.length > 0) {

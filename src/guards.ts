@@ -9,8 +9,13 @@ export type GuardType = "bash" | "path";
  *           reason, letting the human decide. The middle hardness for actions
  *           that are sometimes fine (git push, prod-adjacent commands). Note:
  *           in a headless/non-interactive run there is no one to ask, so "ask"
- *           effectively denies there. */
-export type GuardAction = "deny" | "ask";
+ *           effectively denies there.
+ *  "hold" — park for asynchronous approval: the call is denied *this time*, the
+ *           proposed action is queued (`reins pending`), and the agent is told
+ *           to continue with other work. `reins approve <id>` writes a one-shot
+ *           allowance for the exact input, so the identical retry passes once.
+ *           This is "ask" for the run nobody is watching. */
+export type GuardAction = "deny" | "ask" | "hold";
 
 export interface GuardRule {
   id: string;

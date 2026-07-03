@@ -2,7 +2,8 @@ import { readStdinJson, summarizeToolInput, hashToolInput, nowIso } from "../uti
 import { resolveProjectDir } from "../paths";
 import { loadGuards, checkGuards, GuardRule } from "../guards";
 import { consumeSteering, formatSteeringContext } from "../steering";
-import { emitAsk, emitDeny, emitPreToolContext } from "../hookio";
+import { parkAction, consumeAllowance, formatHoldReason } from "../holds";
+import { emitAllow, emitAsk, emitDeny, emitPreToolContext } from "../hookio";
 
 /**
  * PreToolUse: the moment of decision. Order is deliberate.
@@ -28,7 +29,57 @@ export async function runPreTool(): Promise<void> {
     const guards = loadGuards(cwd);
     const match = checkGuards(guards, toolName, toolInput);
     if (match) {
-      if (match.rule.action === "ask") {
+      if (match.rule.action === "hold") {
+        // Manual/test invocation (no session): deny, but don't park — the same
+        // "don't record phantom sessions" principle as capture. The message
+        // says why, so a by-hand `reins hook pre-tool` check explains itself.
+        if (!sessionId) {
+          emitDeny(match.rule.reason + " [reins hold] (no session — denied, not parked)");
+          return;
+        }
+        // The async gate. First: is this exact call already approved? A
+        // one-shot allowance (written by `reins approve`) keyed on the input
+        // hash lets the identical retry through — once — and we emit an
+        // explicit allow so the human isn't asked twice for the same decision.
+        const inputHash = hashToolInput(toolName, toolInput);
+        const allowance = consumeAllowance(cwd, inputHash);
+        if (allowance) {
+          emitAllow(
+            `Approved via reins (hold ${allowance.action_id}, rule ${allowance.rule_id}).`,
+          );
+          recordDecision(cwd, sessionId, toolName, toolInput, match.rule, "APPROVED", allowance.action_id);
+          return;
+        }
+        // Not approved (yet): park the proposal and deny THIS attempt, with a
+        // reason that redirects the agent to other work instead of a dead end.
+        // The park is by file, not DB, so it holds even where capture can't run.
+        // Gate decisions bias CLOSED, alone in reins: if parking itself fails
+        // (unwritable .reins?), the call is still denied — a hold rule's action
+        // must never run un-approved just because the queue misbehaved.
+        try {
+          const { id, existed } = parkAction(cwd, {
+            session_id: sessionId,
+            tool: toolName,
+            input: toolInput,
+            input_hash: inputHash,
+            rule_id: match.rule.id,
+            reason: match.rule.reason,
+            ts: nowIso(),
+          });
+          emitDeny(formatHoldReason(id, match.rule.reason));
+          // A retry of an already-parked action is the same decision, not a
+          // new audit event — record the HELD row only the first time.
+          if (!existed) {
+            recordDecision(cwd, sessionId, toolName, toolInput, match.rule, "HELD", id);
+          }
+        } catch (e) {
+          warn("hold parking failed (denying anyway): " + String(e));
+          emitDeny(
+            match.rule.reason +
+              " [reins hold] Parking for approval failed, so this call is denied outright.",
+          );
+        }
+      } else if (match.rule.action === "ask") {
         emitAsk(match.rule.reason);
         recordDecision(cwd, sessionId, toolName, toolInput, match.rule, "ASKED");
       } else {
@@ -56,13 +107,15 @@ export async function runPreTool(): Promise<void> {
 }
 
 /**
- * Record a gate decision with its provenance (which rule fired). The rule id in
- * the summary is the seed of the audit trail: `lastrun` shows not just that a
- * call was stopped, but by which rule.
+ * Record a gate decision with its provenance (which rule fired, and for holds,
+ * which queue entry). The rule id in the summary is the seed of the audit
+ * trail: `lastrun` shows not just that a call was stopped, but by which rule.
  *
- * ASKED rows get a decision-derived hash on purpose: if the human approves, the
- * real call executes and PostToolUse records it with the true input hash — an
- * ASKED row sharing that hash would inflate the loop alarm's repeat count.
+ * ASKED / HELD / APPROVED rows get a decision-derived hash on purpose: when the
+ * real call eventually executes, PostToolUse records it with the true input
+ * hash — a gate row sharing that hash would inflate the loop alarm's repeat
+ * count. Only DENIED keeps the true hash: an agent repeatedly slamming into
+ * the same hard veto *is* a loop worth alarming on.
  */
 function recordDecision(
   cwd: string | undefined,
@@ -70,7 +123,8 @@ function recordDecision(
   toolName: string,
   toolInput: unknown,
   rule: GuardRule,
-  decision: "DENIED" | "ASKED",
+  decision: "DENIED" | "ASKED" | "HELD" | "APPROVED",
+  holdId?: string,
 ): void {
   if (!sessionId) return; // manual/test invocation — don't pollute the log
   try {
@@ -86,14 +140,18 @@ function recordDecision(
       session_id: sessionId,
       tool: toolName,
       input_summary:
-        `${decision}: ` + summarizeToolInput(toolName, toolInput) + ` [guard:${rule.id}]`,
+        `${decision}: ` +
+        summarizeToolInput(toolName, toolInput) +
+        ` [guard:${rule.id}]` +
+        (holdId ? ` [hold:${holdId}]` : ""),
       input_hash:
-        decision === "ASKED"
-          ? hashToolInput("ASKED:" + toolName, toolInput)
-          : hashToolInput(toolName, toolInput),
-      // A deny is a definitive non-execution; an ask's resolution is unknown
-      // here (if approved, the executed call gets its own PostToolUse row).
-      ok: decision === "DENIED" ? 0 : null,
+        decision === "DENIED"
+          ? hashToolInput(toolName, toolInput)
+          : hashToolInput(decision + ":" + toolName, toolInput),
+      // DENIED and HELD are definitive non-executions of this attempt. An
+      // ask's resolution is unknown here, and an APPROVED row is a marker —
+      // the executed call gets its own PostToolUse row with the real ok.
+      ok: decision === "DENIED" || decision === "HELD" ? 0 : null,
       ts: nowIso(),
     });
   } catch (e) {
