@@ -31,6 +31,10 @@ Nudge it mid-run · hard-block what it must never do · get warned when it loops
 
 Local-first. No daemon. No backend. No account. Nothing leaves your machine.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/steer-picker.svg" alt="reins steer with several live sessions: a picker lists each agent by name with its status and last tool call, and asks where the steer should land" width="920">
+</p>
+
 ---
 
 ## Why this exists
@@ -140,6 +144,10 @@ reins guard remove <id>                       # ids shown by `guard list`
 reins guard reset                             # back to defaults
 ```
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
+</p>
+
 **`--ask` is the middle hardness.** Some actions aren't *never* — they're *check with me first* (pushes, prod-adjacent commands, package publishes). An `ask` rule doesn't veto; it makes Claude Code pause and show **you** the exact call with your rule's reason, and you approve or deny it in the moment (`permissionDecision: "ask"`). One thing to know: it needs a human at the terminal — in a headless/non-interactive run there's no one to ask, so `ask` effectively denies there. When you need a wall that holds unconditionally, that's `deny` (the default).
 
 ### `--hold` — the approval queue, for the run nobody is watching
@@ -156,6 +164,12 @@ reins pending                                 # morning: what did they want to d
 reins approve ab12cd34                        # sign off — the agent may retry it
 reins deny ab12cd34 --steer "open a PR instead of pushing to main"
 ```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/hold-queue.svg" alt="The full hold-queue exchange: a guard parks the agent's git push, reins pending lists it, reins deny refuses it with a steer, and the refusal is delivered into the running session" width="740">
+</p>
+
+> **Field note — the first action ever parked by this queue was reins' own release.** While building this feature we put a `--hold` rule on `git push` in this very repo. An agent session finished the work, tried to push its own commits, and got parked (`f27f93b3`, the exchange above). The developer refused it — `reins deny f27f93b3 --steer "i pushed myself"` — and the refusal reached the still-running agent at its next tool call, which acknowledged and moved on. The same afternoon the rule also parked a **false positive**: a script whose *text* merely mentioned the push command. That's the "form, not intent" caveat below doing exactly what it says — both halves of the trade-off, live, on day one.
 
 `reins approve` writes a **one-shot allowance for that exact input** and steers the session to retry: the identical call passes once (explicitly allowed, no double prompt), then the rule holds again. Sessions that end with parked actions say so in `reins sessions` / `reins lastrun` (⏳ awaiting approval), and the trajectory records `HELD` / `APPROVED` / `REFUSED` with the rule and queue ids.
 
@@ -228,28 +242,9 @@ Summary
 
 `reins sessions` is a snapshot; **`reins watch` is the live view.** A self-refreshing dashboard of every agent in the repo — each one's last tool call, whether it's **active / idle / looping right now**, and any steering already queued for it — built for the case a built-in queued message can't serve: **aiming a nudge at one of several running agents without alt-tabbing into its window.**
 
-```text
-$ reins watch
-reins · watch  myproject   14:22:31 · every 2s · loop≥3
-  broadcast steer queued: "keep it minimal"
-
-  › auth-agent     3b9f2a1c  ● active     18 calls · 3s ago    ✎ steer queued
-      ▶ Bash     npm test
-      ✏ Edit     src/auth/index.ts
-      ▶ Bash     npm run build
-  ────────────────────────────────────────────────────────────
-    hardy-lynx     7d4e1100  ⟳ looping    24 calls · 1s ago
-      ▶ Bash     npm run build ⟳
-      ▶ Bash     npm run build ⟳
-      ▶ Bash     npm run build ⟳
-  ────────────────────────────────────────────────────────────
-    quiet-crane    9f0c5522  completed     6 calls · 2m ago
-      · Read     src/api/routes.ts
-      ✏ Edit     src/api/index.ts
-      ⛔ Bash     rm -rf build
-
-  ↑/↓ jk select · s steer one · b broadcast · c clear · r refresh · q quit
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/watch.svg" alt="reins watch: three agent sessions, each named, with live status (active / looping / completed), a trajectory tail of recent tool calls, and steer-queued flags" width="680">
+</p>
 
 Each agent is its own block — live status (`active` / `idle` / `looping` / outcome), its **recent trajectory tail**, and any queued steering — divided from the next by a rule. Status is driven by *recent tool activity*, not the per-turn Stop hook, so an agent that's mid-conversation reads `active`, not `completed`.
 

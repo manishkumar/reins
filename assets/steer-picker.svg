@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1128" height="244" viewBox="0 0 1128 244" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
+<rect width="1128" height="244" rx="10" fill="#0d1117"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h1108 a10 10 0 0 1 10 10 v26 h-1128 z" fill="#161b22"/>
+<circle cx="20" cy="18" r="5.5" fill="#ff5f57"/>
+<circle cx="40" cy="18" r="5.5" fill="#febc2e"/>
+<circle cx="60" cy="18" r="5.5" fill="#28c840"/>
+<text x="564" y="22" text-anchor="middle" fill="#8b949e" font-size="12">reins steer — several agents live, one question</text>
+<text y="63" xml:space="preserve"><tspan x="18.0" fill="#e6edf3">$ reins steer "focus on the token refresh path"</tspan></text>
+<text y="83" xml:space="preserve"><tspan x="18.0" fill="#e6edf3" font-weight="700">Several sessions are live — where should this steer land?</tspan></text>
+<text y="103" xml:space="preserve"><tspan x="18.0" fill="#e6edf3">  </tspan><tspan x="33.7" fill="#39c5cf">1</tspan><tspan x="41.5" fill="#e6edf3">. </tspan><tspan x="57.3" fill="#e6edf3" font-weight="700">auth-refactor   </tspan><tspan x="182.8" fill="#e6edf3"> </tspan><tspan x="190.7" fill="#8b949e">a2cbbe90</tspan><tspan x="253.5" fill="#e6edf3">  </tspan><tspan x="269.2" fill="#d29922">● active</tspan><tspan x="332.0" fill="#e6edf3">  </tspan><tspan x="347.7" fill="#8b949e">5 calls</tspan><tspan x="402.6" fill="#8b949e">  Bash: npm test</tspan></text>
+<text y="123" xml:space="preserve"><tspan x="18.0" fill="#e6edf3">  </tspan><tspan x="33.7" fill="#39c5cf">2</tspan><tspan x="41.5" fill="#e6edf3">. </tspan><tspan x="57.3" fill="#e6edf3" font-weight="700">payments-agent  </tspan><tspan x="182.8" fill="#e6edf3"> </tspan><tspan x="190.7" fill="#8b949e">b0be190a</tspan><tspan x="253.5" fill="#e6edf3">  </tspan><tspan x="269.2" fill="#d29922">● active</tspan><tspan x="332.0" fill="#e6edf3">  </tspan><tspan x="347.7" fill="#8b949e">3 calls</tspan><tspan x="402.6" fill="#8b949e">  Bash: npm run build</tspan><tspan x="567.5" fill="#e6edf3">  </tspan><tspan x="583.2" fill="#bc8cff">✎ steer queued</tspan></text>
+<text y="143" xml:space="preserve"><tspan x="18.0" fill="#e6edf3">  </tspan><tspan x="33.7" fill="#39c5cf">3</tspan><tspan x="41.5" fill="#e6edf3">. </tspan><tspan x="57.3" fill="#e6edf3" font-weight="700">keen-jay        </tspan><tspan x="182.8" fill="#e6edf3"> </tspan><tspan x="190.7" fill="#8b949e">cc457ae1</tspan><tspan x="253.5" fill="#e6edf3">  </tspan><tspan x="269.2" fill="#8b949e">○ idle 9m</tspan><tspan x="339.8" fill="#e6edf3">  </tspan><tspan x="355.6" fill="#8b949e">2 calls</tspan><tspan x="410.5" fill="#8b949e">  Edit: README.md</tspan></text>
+<text y="163" xml:space="preserve"><tspan x="18.0" fill="#e6edf3">  </tspan><tspan x="33.7" fill="#39c5cf">a</tspan><tspan x="41.5" fill="#8b949e">. all — broadcast; whichever session moves next consumes it</tspan></text>
+<text y="183" xml:space="preserve"><tspan x="18.0" fill="#8b949e">Choose [1-3, a=all, q=quit] (default a): </tspan><tspan x="339.8" fill="#e6edf3">1</tspan></text>
+<text y="203" xml:space="preserve"><tspan x="18.0" fill="#3fb950">✓ Steering queued</tspan><tspan x="151.4" fill="#e6edf3"> → session </tspan><tspan x="237.8" fill="#39c5cf">a2cbbe90</tspan><tspan x="300.6" fill="#e6edf3">.</tspan></text>
+<text y="223" xml:space="preserve"><tspan x="18.0" fill="#8b949e">It reaches the agent at its next tool call — its next decision point — then clears (one-shot). The run keeps going; nothing is interrupted.</tspan></text>
+</svg>
