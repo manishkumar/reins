@@ -14,13 +14,15 @@ function cmdLastrun(args) {
         console.log(format_1.c.dim(note || "No runs recorded yet (.reins/runs.db doesn't exist)."));
         return 0;
     }
-    // Allow `reins lastrun <session_id_prefix>` to inspect an older run.
+    // Allow `reins lastrun <session>` — id prefix, custom name, or mnemonic —
+    // to inspect an older run (same resolution as `steer --session`).
     const wanted = args[0];
     let session;
     if (wanted) {
-        session = db
-            .prepare(`SELECT * FROM sessions WHERE id LIKE ? ORDER BY started DESC LIMIT 1`)
-            .get(wanted + "%");
+        const id = (0, db_1.matchSessions)(db, wanted)[0]; // most recent match wins here
+        session = id
+            ? db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id)
+            : undefined;
     }
     else {
         session = db

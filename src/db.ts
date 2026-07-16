@@ -1,5 +1,6 @@
 import { ensureReinsDir, dbPath } from "./paths";
 import { getDriver, SqlDb } from "./store";
+import { mnemonic } from "./names";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -9,7 +10,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended TEXT,
   total_tokens INTEGER,
   total_cost REAL,
-  final_outcome TEXT
+  final_outcome TEXT,
+  name TEXT
 );
 CREATE TABLE IF NOT EXISTS tool_calls (
   session_id TEXT,
@@ -63,8 +65,136 @@ export function openDb(payloadCwd?: string): SqlDb | null {
     d.exec(SCHEMA);
     return d;
   });
+  // Migration is best-effort like everything else in capture: a runs.db that
+  // can't grow the name column just keeps showing auto mnemonics.
+  try {
+    ensureSessionNameColumn(db);
+  } catch {
+    /* naming unavailable on this db — display falls back to mnemonics */
+  }
   _db = db;
   return db;
+}
+
+/** True if this runs.db has the sessions.name column (added in 0.3.x). */
+export function hasSessionNameColumn(db: SqlDb): boolean {
+  try {
+    const row = db
+      .prepare(`SELECT COUNT(*) AS c FROM pragma_table_info('sessions') WHERE name = 'name'`)
+      .get() as { c: number } | undefined;
+    return (row?.c ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Add sessions.name to a pre-0.3.x runs.db. Idempotent. */
+export function ensureSessionNameColumn(db: SqlDb): void {
+  if (hasSessionNameColumn(db)) return;
+  withRetry(() => db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT`));
+}
+
+/** Set (or with null, clear) a session's custom display name. */
+export function setSessionName(db: SqlDb, sessionId: string, name: string | null): void {
+  withRetry(() => db.prepare(`UPDATE sessions SET name = ? WHERE id = ?`).run(name, sessionId));
+}
+
+export interface SessionIdRow {
+  id: string;
+  name: string | null;
+}
+
+/** Recent session ids (+ custom names where the column exists), newest first. */
+export function listSessionIds(db: SqlDb, limit = 200): SessionIdRow[] {
+  const hasName = hasSessionNameColumn(db);
+  const rows = db
+    .prepare(
+      `SELECT id${hasName ? ", name" : ""} FROM sessions ORDER BY started DESC LIMIT ?`,
+    )
+    .all(limit) as Array<{ id: string; name?: string | null }>;
+  return rows.map((r) => ({ id: r.id, name: hasName ? r.name ?? null : null }));
+}
+
+/**
+ * Resolve a human-typed token to session ids. Tiers, first non-empty wins:
+ * exact id → id prefix → custom name → auto mnemonic. Ordering matters: an id
+ * prefix can never be shadowed by someone naming a session "3b9f". More than
+ * one result means the token is ambiguous — callers report, never guess.
+ */
+export function matchSessions(db: SqlDb, token: string): string[] {
+  const rows = listSessionIds(db);
+  const t = token.toLowerCase();
+  const exact = rows.filter((r) => r.id === token);
+  if (exact.length) return exact.map((r) => r.id);
+  const prefix = rows.filter((r) => r.id.startsWith(token));
+  if (prefix.length) return prefix.map((r) => r.id);
+  const named = rows.filter((r) => (r.name ?? "").trim().toLowerCase() === t);
+  if (named.length) return named.map((r) => r.id);
+  return rows.filter((r) => mnemonic(r.id) === t).map((r) => r.id);
+}
+
+export interface ActiveSessionRow {
+  id: string;
+  name: string | null;
+  calls: number;
+  lastTsMs: number | null;
+  lastTool: string | null;
+  lastSummary: string | null;
+}
+
+/**
+ * Sessions with activity inside `windowMs` — the candidates a human might mean
+ * when they steer without naming a target. "Activity" is the last tool call
+ * (or session start, for a session that hasn't called a tool yet); the `ended`
+ * flag is ignored because Claude Code sets it at every turn boundary.
+ */
+export function recentActiveSessions(
+  db: SqlDb,
+  nowMs: number,
+  windowMs: number,
+  limit = 9,
+): ActiveSessionRow[] {
+  const hasName = hasSessionNameColumn(db);
+  const rows = db
+    .prepare(
+      `SELECT s.id${hasName ? ", s.name" : ""}, COUNT(t.seq) AS calls,
+              COALESCE(MAX(t.ts), s.started) AS last_ts
+         FROM sessions s
+         LEFT JOIN tool_calls t ON t.session_id = s.id
+        GROUP BY s.id
+        ORDER BY COALESCE(MAX(t.ts), s.started) DESC
+        LIMIT ?`,
+    )
+    .all(limit) as Array<{ id: string; name?: string | null; calls: number; last_ts: string | null }>;
+
+  const out: ActiveSessionRow[] = [];
+  for (const r of rows) {
+    const ts = r.last_ts ? Date.parse(r.last_ts) : NaN;
+    const lastTsMs = Number.isFinite(ts) ? ts : null;
+    if (lastTsMs == null || nowMs - lastTsMs > windowMs) continue;
+    let lastTool: string | null = null;
+    let lastSummary: string | null = null;
+    try {
+      const call = db
+        .prepare(`SELECT tool, input_summary FROM tool_calls WHERE session_id = ? ORDER BY seq DESC LIMIT 1`)
+        .get(r.id) as { tool: string; input_summary: string } | undefined;
+      if (call) {
+        lastTool = call.tool;
+        lastSummary = call.input_summary;
+      }
+    } catch {
+      /* row still useful without the last-call preview */
+    }
+    out.push({
+      id: r.id,
+      name: hasName ? r.name ?? null : null,
+      calls: r.calls,
+      lastTsMs,
+      lastTool,
+      lastSummary,
+    });
+  }
+  return out;
 }
 
 /** Open read-only for query commands; null if no backend or no db file yet. */

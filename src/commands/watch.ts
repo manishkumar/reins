@@ -1,5 +1,6 @@
 import * as readline from "node:readline";
-import { openDbReadOnly } from "../db";
+import { openDbReadOnly, hasSessionNameColumn } from "../db";
+import { displayName } from "../names";
 import { capabilityNote } from "../store";
 import { loadConfig } from "../config";
 import { resolveProjectDir } from "../paths";
@@ -46,6 +47,8 @@ export interface CallLine {
 
 export interface SessionView {
   id: string;
+  /** Human-readable label: custom (reins name) or auto mnemonic. */
+  name?: string;
   ended: boolean;
   outcome: string | null;
   calls: number;
@@ -174,7 +177,7 @@ function runInteractive(
       const who =
         target === "broadcast"
           ? "all sessions (broadcast)"
-          : `session ${c.cyan(shortId(sel!.id))}`;
+          : `${c.cyan(sel!.name ?? shortId(sel!.id))} ${c.dim("(" + shortId(sel!.id) + ")")}`;
       prompting = true;
       const answer = (await promptLine(`steer ${who} › `)).trim();
       prompting = false;
@@ -290,9 +293,10 @@ export function buildModel(
 ): WatchModel {
   const sessions: SessionView[] = [];
   try {
+    const hasName = hasSessionNameColumn(db);
     const rows = db
       .prepare(
-        `SELECT s.id, s.ended, s.final_outcome, s.started,
+        `SELECT s.id, ${hasName ? "s.name, " : ""}s.ended, s.final_outcome, s.started,
                 COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
            FROM sessions s
            LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -302,6 +306,7 @@ export function buildModel(
       )
       .all(limit) as Array<{
       id: string;
+      name?: string | null;
       ended: string | null;
       final_outcome: string | null;
       started: string | null;
@@ -346,6 +351,7 @@ export function buildModel(
       const lastTsStr = r.last_ts || r.started;
       sessions.push({
         id: r.id,
+        name: displayName(r.id, r.name),
         ended: !!r.ended,
         outcome: r.final_outcome,
         calls: r.calls,
@@ -418,15 +424,17 @@ export function renderFrame(model: WatchModel, ui: UiState, interactive: boolean
   return lines.join("\n");
 }
 
-/** The session's header line: caret, id, status, call count + age, steer flag. */
+/** The session's header line: caret, name, id, status, call count + age, steer flag. */
 function headerLine(s: SessionView, selected: boolean, nowMs: number): string {
   const caret = selected ? c.cyan(c.bold("›")) : " ";
-  const id = selected ? c.bold(pad(shortId(s.id), 8)) : c.cyan(pad(shortId(s.id), 8));
+  const label = pad(s.name ?? displayName(s.id), 14);
+  const name = selected ? c.bold(label) : c.cyan(label);
+  const id = c.dim(pad(shortId(s.id), 8));
   const status = statusCell(s, nowMs);
   const age = s.lastTsMs != null ? nowMs - s.lastTsMs : null;
   const meta = c.dim(`${s.calls} call${s.calls === 1 ? "" : "s"}` + (age != null ? ` · ${formatAge(age)} ago` : ""));
   const steer = s.steerQueued ? "   " + c.magenta("✎ steer queued") : "";
-  return `  ${caret} ${id}  ${status}  ${meta}${steer}`;
+  return `  ${caret} ${name} ${id}  ${status}  ${meta}${steer}`;
 }
 
 function statusCell(s: SessionView, nowMs: number): string {

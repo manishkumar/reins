@@ -111,14 +111,17 @@ One delivery guarantee: if there **is** no next tool call — you steered as the
 
 Two quick `reins steer`s before the next tool call **both** reach the agent (they append). Use `--replace` to overwrite, `reins steer --clear` to reset.
 
-**Running several agents in one repo?** A plain `reins steer` is a *broadcast* — it lands on whichever session hits the next tool boundary first. To nudge a specific agent, target its session (ids from `reins sessions`, prefixes accepted):
+**Running several agents in one repo?** A plain `reins steer` is a *broadcast* — it lands on whichever session hits the next tool boundary first. When more than one session has been active in the last ~15 minutes and you're at a terminal, `reins steer "<msg>"` **lists them and asks which one you mean** (name, id, liveness, last tool call) — press Enter to keep the broadcast, pick a number to target, `--broadcast` to skip the question. Piped/scripted invocations are never prompted; they broadcast exactly as before.
+
+To aim without the picker, target a session by id prefix, its auto mnemonic, or a name you gave it:
 
 ```bash
-reins sessions                                   # find the session id
-reins steer "stay on the payments module" --session 3b9f2a1c
+reins sessions                                   # every session has a name: rosy-egret  a2cbbe90
+reins name a2cbbe90 "payments-agent"             # ...or give it your own
+reins steer "stay on the payments module" --session payments-agent
 ```
 
-A targeted nudge only reaches that session; broadcasts still go to everyone else.
+A targeted nudge only reaches that session; broadcasts still go to everyone else. Names are display and addressing sugar stored in the local capture DB (so custom names need `node:sqlite`, Node ≥ 22.5) — the auto mnemonics are derived from the session id and work everywhere. Steering files, holds, and approvals stay keyed by the real session id; nothing control-plane ever depends on a name resolving.
 
 ---
 
@@ -217,8 +220,8 @@ Summary
     ⟳ Bash ×3: npm test
 ```
 
-- `reins sessions` — list recent sessions in the project (status, call count, time). Handy when several agents have run in one repo.
-- `reins lastrun <session-prefix>` — inspect a specific older run.
+- `reins sessions` — list recent sessions in the project (name, status, call count, time). Handy when several agents have run in one repo. Every session gets a deterministic mnemonic (`rosy-egret`) derived from its id; `reins name <session> "<label>"` replaces it with something meaningful to you (`--clear` reverts). Names work anywhere a session id does: `steer --session`, `lastrun`, the steer picker.
+- `reins lastrun <session>` — inspect a specific older run (id prefix or name).
 - `reins loops` — just the sessions where the agent got stuck.
 
 ### `reins watch` — the multi-agent cockpit
@@ -230,17 +233,17 @@ $ reins watch
 reins · watch  myproject   14:22:31 · every 2s · loop≥3
   broadcast steer queued: "keep it minimal"
 
-  › 3b9f2a1c  ● active     18 calls · 3s ago    ✎ steer queued
+  › auth-agent     3b9f2a1c  ● active     18 calls · 3s ago    ✎ steer queued
       ▶ Bash     npm test
       ✏ Edit     src/auth/index.ts
       ▶ Bash     npm run build
   ────────────────────────────────────────────────────────────
-    7d4e1100  ⟳ looping    24 calls · 1s ago
+    hardy-lynx     7d4e1100  ⟳ looping    24 calls · 1s ago
       ▶ Bash     npm run build ⟳
       ▶ Bash     npm run build ⟳
       ▶ Bash     npm run build ⟳
   ────────────────────────────────────────────────────────────
-    9f0c5522  completed     6 calls · 2m ago
+    quiet-crane    9f0c5522  completed     6 calls · 2m ago
       · Read     src/api/routes.ts
       ✏ Edit     src/api/index.ts
       ⛔ Bash     rm -rf build
@@ -355,14 +358,18 @@ A crashing hook **fails open** (the agent proceeds) so a bug in `reins` can neve
 reins init [--print|--local]     Set up .reins/ and wire (or print) the hooks
 reins uninstall [--purge]        Remove the hooks (--purge also drops .reins/)
 reins doctor                     Diagnose your setup
-reins steer "<msg>" [--replace]  Queue steering for the next tool call (appends)
+reins steer "<msg>" [--replace]  Queue steering for the next tool call (appends;
+                                 several live agents + a TTY → a picker asks which)
+reins steer "<msg>" --session <id|name>   Target one agent (id/prefix/name/mnemonic)
+reins steer "<msg>" --broadcast  Skip the picker; whichever agent moves next gets it
 reins steer [--clear]            Show / clear pending steering
+reins name <session> "<label>"   Name a session; --clear reverts to the auto mnemonic
 reins guard list|add|remove|reset    (add takes --ask to escalate, --hold to park)
 reins pending                    List actions parked by hold rules
 reins approve <id>               Approve a parked action (one-shot, exact input)
 reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead
-reins lastrun [session-prefix]   Readable account of a run
-reins sessions [-n N]            List recent sessions
+reins lastrun [session]          Readable account of a run (id prefix or name)
+reins sessions [-n N]            List recent sessions (with names)
 reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one
 reins report [--open] [-o FILE]  Self-contained local HTML report of all runs
 reins loops                      Sessions where the agent looped

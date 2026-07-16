@@ -3,6 +3,31 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **The steer picker.** With several agents alive in one repo, a bare
+  `reins steer "<msg>"` used to broadcast silently — landing on whichever
+  session moved first, which may not be the one you meant. Now, when more than
+  one session has been active in the last ~15 minutes *and* you're at a TTY,
+  steer lists them (name, short id, active/idle, last tool call, any queued
+  steer) and asks which one you mean. Enter keeps the broadcast — old muscle
+  memory intact — a number targets that session, `q` cancels, and
+  `--broadcast` skips the question. Piped/scripted invocations are never
+  prompted and broadcast exactly as before, so nothing breaks in automation.
+- **Session names.** Every session now has a deterministic mnemonic
+  (`rosy-egret`) derived from its id — no storage, works even with capture
+  off — shown in `sessions`, `watch`, and the steer picker next to the short
+  id. `reins name <session> "<label>"` replaces it with your own
+  (`--clear` reverts). Names and mnemonics work anywhere a session id does:
+  `steer --session payments-agent`, `lastrun auth-work`, the picker. They are
+  display + addressing sugar stored in the capture DB (custom names need
+  `node:sqlite`; the `name` column is added to existing runs.db files
+  automatically, best-effort) — steering files, holds, and approvals stay
+  keyed by the real session id, so no control-plane decision ever depends on
+  a name resolving. Resolution precedence is exact id → id prefix → custom
+  name → mnemonic, so an id prefix can never be shadowed by a name.
+
 ## [0.3.0]
 
 ### Added

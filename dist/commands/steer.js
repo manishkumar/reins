@@ -1,16 +1,63 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdSteer = cmdSteer;
+exports.parsePickerChoice = parsePickerChoice;
+exports.formatPickerRow = formatPickerRow;
+const readline = __importStar(require("node:readline"));
 const steering_1 = require("../steering");
 const db_1 = require("../db");
+const names_1 = require("../names");
 const format_1 = require("./format");
-function cmdSteer(args) {
-    // --session <id-or-prefix> targets one session; otherwise steering is a
-    // broadcast consumed by whichever session hits the next tool boundary first.
+/**
+ * Sessions with activity inside this window are offered by the picker. Wider
+ * than watch's 30s "active" chip on purpose: an interactive session waiting on
+ * its human idles for minutes and is still very much steerable. The row shows
+ * each session's age so the human — not a heuristic — makes the final call.
+ */
+const PICKER_WINDOW_MS = 15 * 60_000;
+/** Same threshold as watch: activity this fresh renders as ● active. */
+const ACTIVE_MS = 30_000;
+async function cmdSteer(args) {
+    // --session <id|prefix|name> targets one session; otherwise steering is a
+    // broadcast consumed by whichever session hits the next tool boundary first —
+    // unless several sessions are live and we're on a TTY, in which case we ask.
     const session = resolveSession(args);
     if (session === false)
-        return 1; // ambiguous/not-found prefix; message printed
-    const sid = session || undefined;
+        return 1; // ambiguous/not-found; message printed
+    let sid = session || undefined;
     const rest = stripFlag(args, "--session");
     if (rest[0] === "--clear" || rest[0] === "-c") {
         (0, steering_1.clearSteering)(undefined, sid);
@@ -18,10 +65,28 @@ function cmdSteer(args) {
         return 0;
     }
     const replace = rest.includes("--replace");
-    const message = rest.filter((a) => a !== "--replace").join(" ").trim();
+    const broadcast = rest.includes("--broadcast") || rest.includes("--all");
+    const message = rest
+        .filter((a) => a !== "--replace" && a !== "--broadcast" && a !== "--all")
+        .join(" ")
+        .trim();
     if (!message) {
         showPending(sid);
         return 0;
+    }
+    // With several agents alive in one repo, a bare steer silently races: it
+    // lands on whichever session moves first, which may not be the one you
+    // meant. So when it's interactive and more than one session is plausibly
+    // live, list them and ask. Enter keeps the broadcast (old muscle memory);
+    // --broadcast skips the question; piped/scripted runs are never prompted.
+    if (!sid && !broadcast && process.stdin.isTTY && process.stdout.isTTY) {
+        const picked = await pickSession();
+        if (picked === "cancelled") {
+            console.log(format_1.c.dim("Cancelled — nothing queued."));
+            return 0;
+        }
+        if (picked)
+            sid = picked;
     }
     const hadPending = (0, steering_1.peekSteering)(undefined, sid) !== null;
     const target = sid ? ` → session ${format_1.c.cyan(short(sid))}` : "";
@@ -37,6 +102,93 @@ function cmdSteer(args) {
     console.log(format_1.c.dim("It reaches the agent at its next tool call — its next decision point — " +
         "then clears (one-shot). The run keeps going; nothing is interrupted."));
     return 0;
+}
+/**
+ * Ask which live session the steer is for. Returns a session id, undefined
+ * for broadcast (also the 0-or-1-live-sessions fast path — no question, no
+ * behavior change), or "cancelled".
+ */
+async function pickSession() {
+    let rows = [];
+    try {
+        const db = (0, db_1.openDbReadOnly)();
+        if (!db)
+            return undefined; // no capture — nothing to list, broadcast as ever
+        rows = (0, db_1.recentActiveSessions)(db, Date.now(), PICKER_WINDOW_MS);
+    }
+    catch {
+        return undefined; // a flaky DB must never block a steer
+    }
+    if (rows.length < 2)
+        return undefined;
+    const nowMs = Date.now();
+    console.log(format_1.c.bold("Several sessions are live — where should this steer land?"));
+    rows.forEach((r, i) => console.log(formatPickerRow(r, i, nowMs)));
+    console.log("  " + format_1.c.cyan("a") + format_1.c.dim(". all — broadcast; whichever session moves next consumes it"));
+    for (;;) {
+        const answer = await promptLine(format_1.c.dim(`Choose [1-${rows.length}, a=all, q=quit] (default a): `));
+        const choice = parsePickerChoice(answer, rows.length);
+        if (choice.kind === "broadcast")
+            return undefined;
+        if (choice.kind === "cancel")
+            return "cancelled";
+        if (choice.kind === "session")
+            return rows[choice.index].id;
+        console.log(format_1.c.yellow(`  ? "${answer.trim()}" — a number 1-${rows.length}, "a", or "q".`));
+    }
+}
+/** Pure parser for the picker answer, so the interactive path stays testable. */
+function parsePickerChoice(answer, count) {
+    const a = answer.trim().toLowerCase();
+    if (a === "" || a === "a" || a === "all")
+        return { kind: "broadcast" };
+    if (a === "q" || a === "quit")
+        return { kind: "cancel" };
+    if (/^\d+$/.test(a)) {
+        const n = parseInt(a, 10);
+        if (n >= 1 && n <= count)
+            return { kind: "session", index: n - 1 };
+    }
+    return { kind: "invalid" };
+}
+/** One numbered picker row: name, id, liveness, and the last call as context. */
+function formatPickerRow(r, index, nowMs) {
+    const name = (0, names_1.displayName)(r.id, r.name);
+    const age = r.lastTsMs != null ? nowMs - r.lastTsMs : null;
+    const live = age != null && age < ACTIVE_MS;
+    const status = live ? format_1.c.yellow("● active") : format_1.c.dim(`○ idle ${age != null ? formatAge(age) : "?"}`);
+    const meta = format_1.c.dim(`${r.calls} call${r.calls === 1 ? "" : "s"}`);
+    const last = r.lastTool && r.lastSummary
+        ? format_1.c.dim(`  ${r.lastTool}: ${truncateFlat(r.lastSummary, 40)}`)
+        : "";
+    const steer = peekQueued(r.id) ? "  " + format_1.c.magenta("✎ steer queued") : "";
+    return (`  ${format_1.c.cyan(String(index + 1))}. ${format_1.c.bold(pad(name, 16))} ${format_1.c.dim(short(r.id))}  ` +
+        `${status}  ${meta}${last}${steer}`);
+}
+function peekQueued(sessionId) {
+    try {
+        return (0, steering_1.peekSteering)(undefined, sessionId) !== null;
+    }
+    catch {
+        return false;
+    }
+}
+function promptLine(question) {
+    return new Promise((resolve) => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        let answered = false;
+        rl.question(question, (answer) => {
+            answered = true;
+            rl.close();
+            resolve(answer);
+        });
+        // stdin EOF (ctrl-d, or a pty that closed): fall back to broadcast — the
+        // pre-picker behavior — rather than hanging with nothing queued.
+        rl.on("close", () => {
+            if (!answered)
+                resolve("a");
+        });
+    });
 }
 function showPending(sid) {
     const pending = (0, steering_1.peekSteering)(undefined, sid);
@@ -57,12 +209,13 @@ function showPending(sid) {
         if (!pending && !targeted.length) {
             console.log("");
             console.log("Usage: " + format_1.c.cyan('reins steer "the detail you forgot to put in the prompt"'));
-            console.log(format_1.c.dim('       reins steer --session <id> "..."   (target one agent; see `reins sessions`)'));
+            console.log(format_1.c.dim('       reins steer --session <id|name> "..."   (target one agent; see `reins sessions`)'));
         }
     }
 }
 /**
- * Resolve a --session value (full id or prefix) to a full session id via the DB.
+ * Resolve a --session value — id, id prefix, custom name, or auto mnemonic —
+ * to a full session id via the DB (see matchSessions for the precedence).
  * Returns: undefined (no --session), a string (resolved id), or false (error).
  */
 function resolveSession(args) {
@@ -71,24 +224,22 @@ function resolveSession(args) {
         return undefined;
     const val = args[i + 1];
     if (!val) {
-        console.error(format_1.c.red("--session needs a session id or prefix (see `reins sessions`)."));
+        console.error(format_1.c.red("--session needs a session id, prefix, or name (see `reins sessions`)."));
         return false;
     }
     const db = (0, db_1.openDbReadOnly)();
     if (!db)
         return val; // no DB to resolve against — use the value as given
-    const rows = db
-        .prepare("SELECT id FROM sessions WHERE id LIKE ? ORDER BY started DESC")
-        .all(val + "%");
-    if (rows.length === 0)
-        return val; // unknown id — allow targeting it pre-emptively
-    if (rows.length > 1 && !rows.some((r) => r.id === val)) {
-        console.error(format_1.c.red(`Ambiguous session prefix "${val}" matches ${rows.length} sessions:`));
-        for (const r of rows.slice(0, 5))
-            console.error("  " + short(r.id));
+    const ids = (0, db_1.matchSessions)(db, val);
+    if (ids.length === 0)
+        return val; // unknown — allow targeting it pre-emptively
+    if (ids.length > 1) {
+        console.error(format_1.c.red(`Ambiguous "${val}" — it matches ${ids.length} sessions:`));
+        for (const id of ids.slice(0, 5))
+            console.error(`  ${short(id)}  ${format_1.c.dim((0, names_1.mnemonic)(id))}`);
         return false;
     }
-    return rows.find((r) => r.id === val)?.id ?? rows[0].id;
+    return ids[0];
 }
 function stripFlag(args, flag) {
     const out = [];
@@ -100,6 +251,22 @@ function stripFlag(args, flag) {
         out.push(args[i]);
     }
     return out;
+}
+function truncateFlat(s, max) {
+    const flat = s.replace(/\s+/g, " ");
+    return flat.length <= max ? flat : flat.slice(0, max - 1) + "…";
+}
+function formatAge(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60)
+        return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60)
+        return `${m}m`;
+    return `${Math.floor(m / 60)}h`;
+}
+function pad(s, width) {
+    return s.length >= width ? s : s + " ".repeat(width - s.length);
 }
 function short(id) {
     return id.length > 8 ? id.slice(0, 8) : id;

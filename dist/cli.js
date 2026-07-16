@@ -72,6 +72,10 @@ async function main() {
             const { cmdLoops } = await Promise.resolve().then(() => __importStar(require("./commands/loops")));
             return cmdLoops();
         }
+        case "name": {
+            const { cmdName } = await Promise.resolve().then(() => __importStar(require("./commands/name")));
+            return cmdName(rest);
+        }
         case "sessions":
         case "ls": {
             const { cmdSessions } = await Promise.resolve().then(() => __importStar(require("./commands/sessions")));
@@ -163,10 +167,14 @@ USAGE
   reins doctor                     Diagnose your setup when something's off
   reins uninstall [--purge]        Remove reins hooks (--purge also drops .reins)
   reins steer "<message>"          Queue live steering for the next tool call
-  reins steer "<msg>" --session <id>  Target one agent (id/prefix from sessions)
+                                   (several live agents + a TTY? a picker asks which)
+  reins steer "<msg>" --session <id|name>  Target one agent (id/prefix/name)
+  reins steer "<msg>" --broadcast  Skip the picker; whichever agent moves next gets it
   reins steer "<message>" --replace  Overwrite pending steering (default: append)
   reins steer                      Show pending steering
   reins steer --clear              Clear pending steering
+  reins name <session> "<label>"   Name a session (shows in sessions/watch/picker,
+                                   works as a --session target; --clear for auto name)
   reins guard list                 Show guard rules (deny = hard veto, ask = escalate)
   reins guard add bash "<regex>"   Block matching Bash commands
   reins guard add path "<glob>"    Block writes to matching paths (e.g. **/.env)

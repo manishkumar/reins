@@ -38,6 +38,7 @@ exports.buildModel = buildModel;
 exports.renderFrame = renderFrame;
 const readline = __importStar(require("node:readline"));
 const db_1 = require("../db");
+const names_1 = require("../names");
 const store_1 = require("../store");
 const config_1 = require("../config");
 const paths_1 = require("../paths");
@@ -161,7 +162,7 @@ function runInteractive(db, repo, threshold, intervalSec) {
             }
             const who = target === "broadcast"
                 ? "all sessions (broadcast)"
-                : `session ${format_1.c.cyan(shortId(sel.id))}`;
+                : `${format_1.c.cyan(sel.name ?? shortId(sel.id))} ${format_1.c.dim("(" + shortId(sel.id) + ")")}`;
             prompting = true;
             const answer = (await promptLine(`steer ${who} › `)).trim();
             prompting = false;
@@ -272,8 +273,9 @@ function promptLine(question) {
 function buildModel(db, repo, threshold, limit = DEFAULT_LIMIT) {
     const sessions = [];
     try {
+        const hasName = (0, db_1.hasSessionNameColumn)(db);
         const rows = db
-            .prepare(`SELECT s.id, s.ended, s.final_outcome, s.started,
+            .prepare(`SELECT s.id, ${hasName ? "s.name, " : ""}s.ended, s.final_outcome, s.started,
                 COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
            FROM sessions s
            LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -307,6 +309,7 @@ function buildModel(db, repo, threshold, limit = DEFAULT_LIMIT) {
             const lastTsStr = r.last_ts || r.started;
             sessions.push({
                 id: r.id,
+                name: (0, names_1.displayName)(r.id, r.name),
                 ended: !!r.ended,
                 outcome: r.final_outcome,
                 calls: r.calls,
@@ -374,15 +377,17 @@ function renderFrame(model, ui, interactive) {
     }
     return lines.join("\n");
 }
-/** The session's header line: caret, id, status, call count + age, steer flag. */
+/** The session's header line: caret, name, id, status, call count + age, steer flag. */
 function headerLine(s, selected, nowMs) {
     const caret = selected ? format_1.c.cyan(format_1.c.bold("›")) : " ";
-    const id = selected ? format_1.c.bold(pad(shortId(s.id), 8)) : format_1.c.cyan(pad(shortId(s.id), 8));
+    const label = pad(s.name ?? (0, names_1.displayName)(s.id), 14);
+    const name = selected ? format_1.c.bold(label) : format_1.c.cyan(label);
+    const id = format_1.c.dim(pad(shortId(s.id), 8));
     const status = statusCell(s, nowMs);
     const age = s.lastTsMs != null ? nowMs - s.lastTsMs : null;
     const meta = format_1.c.dim(`${s.calls} call${s.calls === 1 ? "" : "s"}` + (age != null ? ` · ${formatAge(age)} ago` : ""));
     const steer = s.steerQueued ? "   " + format_1.c.magenta("✎ steer queued") : "";
-    return `  ${caret} ${id}  ${status}  ${meta}${steer}`;
+    return `  ${caret} ${name} ${id}  ${status}  ${meta}${steer}`;
 }
 function statusCell(s, nowMs) {
     const age = s.lastTsMs != null ? nowMs - s.lastTsMs : null;

@@ -1,4 +1,4 @@
-import { openDbReadOnly } from "../db";
+import { openDbReadOnly, matchSessions } from "../db";
 import { capabilityNote } from "../store";
 import { c } from "./format";
 import { truncate, summarizeToolInput } from "../util";
@@ -31,13 +31,15 @@ export function cmdLastrun(args: string[]): number {
     return 0;
   }
 
-  // Allow `reins lastrun <session_id_prefix>` to inspect an older run.
+  // Allow `reins lastrun <session>` — id prefix, custom name, or mnemonic —
+  // to inspect an older run (same resolution as `steer --session`).
   const wanted = args[0];
   let session: SessionRow | undefined;
   if (wanted) {
-    session = db
-      .prepare(`SELECT * FROM sessions WHERE id LIKE ? ORDER BY started DESC LIMIT 1`)
-      .get(wanted + "%") as SessionRow | undefined;
+    const id = matchSessions(db, wanted)[0]; // most recent match wins here
+    session = id
+      ? (db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined)
+      : undefined;
   } else {
     session = db
       .prepare(`SELECT * FROM sessions ORDER BY started DESC LIMIT 1`)
