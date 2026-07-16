@@ -1,0 +1,80 @@
+# CLAUDE.md
+
+reins is a kit of Claude Code hooks that lets a human steer a *running* agent: soft
+nudges (`steer`), hard vetoes (`guard`), an approval queue (`hold`), a loop alarm, and
+SQLite capture of every run. Local-first: no daemon, no backend, no accounts.
+
+Read the README before changing behavior — its "honest caveats" sections are spec, not
+marketing copy. If you change what a feature can or can't do, update its caveat in the
+same commit.
+
+## Commands
+
+- `npm run build` — tsc → `dist/` (and chmods `dist/cli.js`)
+- `npm test` — `node --test` over `test/*.test.js`. **Tests import from `dist/`, so
+  always build first.** A stale `dist/` makes tests pass against code you didn't write.
+
+## Invariants — break these and the tool is worse than not existing
+
+This code runs *inside other people's agent sessions*, at every tool call, in repos you
+will never see. That is the frame for everything below.
+
+1. **A hook must never break the host run.** Every hook fails OPEN: if reins crashes or
+   can't read its own files, the agent's tool call proceeds as if reins weren't
+   installed. The one exception is the hold gate, which biases CLOSED — if parking a
+   held action fails, deny anyway; a hold rule's action must never run unapproved just
+   because the queue misbehaved. Capture (DB writes) is best-effort and must never
+   influence a decision.
+
+2. **The stdout protocol is sacred.** A hook invocation emits at most ONE JSON object on
+   stdout and exits 0; no output means passthrough. `src/hookio.ts` is the only place
+   that writes stdout in the hook path. The most likely regression in this codebase is
+   an innocent `console.log` (or a library that prints) anywhere reachable from
+   `reins hook *` — it corrupts the protocol silently. Diagnostics go to stderr or nowhere.
+
+3. **Zero runtime dependencies. Zero network calls.** Both are README badges and the
+   entire trust story. Never solve a problem by adding a dependency — the answer is more
+   code in `src/`, or "no". SQLite is `node:sqlite` (optional, Node ≥ 22.5); steering,
+   guards, and holds must keep working without it. Which is why:
+
+4. **The control plane is plain files, not the DB.** Steering queue, guard rules, hold
+   queue, and allowances live as files under `.reins/`. The DB is capture only — a
+   byproduct. No steering/guard/hold decision may ever depend on the DB being available.
+
+5. **PreToolUse order is deliberate:** guard (short-circuits) → steering (injected once,
+   then cleared) → passthrough.
+
+6. **A queued steer is never silently lost.** If there is no next tool call, the Stop
+   hook delivers it. Any refactor of steering must preserve this delivery guarantee.
+
+7. **Approvals are one-shot and keyed by exact input hash.** `reins approve` lets the
+   *identical* call through, once. Widening this — prefix matching, per-rule blanket
+   allows, TTLs — is a security regression dressed as a UX improvement. Don't.
+
+8. **`reins init` merges into `.claude/settings.json`, never clobbers it**, and
+   `reins uninstall` removes exactly what init added.
+
+## Judgment calls that keep recurring
+
+- **Steering is added spec, not a hijack.** The vocabulary is "steer"/"nudge" — never
+  "stop", "interrupt", "override" — in code, docs, and output strings alike. A hard
+  "never do X" belongs in a guard, not a steer.
+- **Guards are speed bumps, not a sandbox.** They match *form* (raw text), not intent.
+  When someone asks to make them "unbypassable", the honest answer is OS-level
+  sandboxing, and the README already says so. When extending the default denylist,
+  prefer precision over recall: one false veto in a stranger's run costs more trust than
+  a missed pattern.
+- **The loop alarm is consecutive-only.** `npm test` after each edit is healthy
+  iteration; the same call N times *with nothing in between* is a loop. Any "smarter"
+  matching must keep that distinction.
+- **No `session_id` means a manual/test invocation.** Guards and steering still run, but
+  never record phantom sessions or park phantom holds.
+- **Path guards match absolute paths and Windows backslashes** (segment-aligned suffix
+  matching — see the `matchesPathGlob` tests). Claude Code sends absolute `file_path`s;
+  a guard that only matches relative paths is a guard that doesn't fire.
+
+## When unsure
+
+Every ambiguous call here resolves the same way: *what does the person watching — or
+deliberately not watching — the agent need?* Fail open for their run, fail closed for
+their approvals, state the honest caveat, and keep everything on their machine.
