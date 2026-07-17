@@ -60,14 +60,12 @@ The steering is the headline. The SQLite log is a **byproduct** — you never ha
 
 ## Install
 
-**Install straight from GitHub — works today, no build step:**
-
 ```bash
-npm install -g github:manishkumar/reins
+npm install -g @manishky/reins
 reins version
 ```
 
-> Once it's published to the npm registry, `npm install -g reins` will be the one-liner. Both put the same `reins` on your PATH.
+> Prefer installing straight from GitHub? `npm install -g github:manishkumar/reins` works too — no build step. Both put the same `reins` on your PATH.
 
 <details>
 <summary>Prefer a local checkout (for hacking on it)?</summary>
