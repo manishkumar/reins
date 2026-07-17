@@ -54,6 +54,8 @@ You're watching an agent work and you can see it drifting — over-engineering, 
 
 The steering is the headline. The SQLite log is a **byproduct** — you never have to open it for the tool to earn its place.
 
+> 📖 **The story behind reins** — why the durable part turned out to be the gate, not the steering, and what a brutal self-review got right: [*I Built a Tool to Steer Running AI Agents. It Taught Me Where Their Real Cost Is.*](https://medium.com/@manishky/i-built-a-tool-to-steer-running-ai-agents-it-taught-me-where-their-real-cost-is-fc617abfcb07)
+
 ---
 
 ## Install
