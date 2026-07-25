@@ -40,6 +40,7 @@ const fs = __importStar(require("node:fs"));
 const paths_1 = require("./paths");
 const DEFAULTS = {
     loopThreshold: 3,
+    holdTransport: "auto",
 };
 exports.DEFAULT_CONFIG = DEFAULTS;
 function loadConfig(payloadCwd) {

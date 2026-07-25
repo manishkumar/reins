@@ -27,8 +27,25 @@ CREATE TABLE IF NOT EXISTS outcomes (
   stop_reason TEXT,
   gate_result TEXT
 );
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  ts TEXT,
+  tool TEXT,
+  input_summary TEXT,
+  input_hash TEXT,
+  rule_id TEXT,
+  rule_reason TEXT,
+  decision TEXT,
+  resolution TEXT,
+  resolver TEXT,
+  resolved_ts TEXT,
+  hold_id TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_hash ON tool_calls(session_id, input_hash);
+CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_decisions_hold ON decisions(hold_id);
 `;
 
 let _db: SqlDb | null = null;
@@ -358,4 +375,105 @@ export function insertOutcome(
       .prepare(`INSERT INTO outcomes (session_id, stop_reason, gate_result) VALUES (?, ?, ?)`)
       .run(sessionId, stopReason, gateResult),
   );
+}
+
+/**
+ * A single gate decision: what the boundary decided (deny/ask/hold/allow) and,
+ * for a hold, how it was later resolved. This is the unified audit trail —
+ * `reins audit` reads it, `lastrun` summarizes it. Unlike `tool_calls` (which
+ * tags gate rows with a DENIED:/HELD:/… prefix baked into input_summary for
+ * historical reasons), this table has decision/resolution as real columns so
+ * `reins audit --json` doesn't need to parse strings.
+ */
+export interface DecisionRow {
+  session_id: string;
+  ts: string;
+  tool: string;
+  input_summary: string;
+  input_hash: string;
+  rule_id: string;
+  rule_reason: string;
+  /** "breach" is not a decision reins made — it is the record of a parked
+   *  action that executed anyway, detected after the fact by PostToolUse. */
+  decision: "deny" | "ask" | "hold" | "allow" | "breach";
+  hold_id?: string | null;
+}
+
+export function insertDecision(db: SqlDb, row: DecisionRow): void {
+  withRetry(() =>
+    db
+      .prepare(
+        `INSERT INTO decisions
+           (session_id, ts, tool, input_summary, input_hash, rule_id, rule_reason, decision, resolution, resolver, resolved_ts, hold_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+      )
+      .run(
+        row.session_id,
+        row.ts,
+        row.tool,
+        row.input_summary,
+        row.input_hash,
+        row.rule_id,
+        row.rule_reason,
+        row.decision,
+        row.hold_id ?? null,
+      ),
+  );
+}
+
+export interface ResolveDecisionInput {
+  hold_id: string;
+  resolution: "approved" | "denied";
+  resolver: string;
+  resolved_ts: string;
+}
+
+/**
+ * Close the loop on a parked decision: `reins approve`/`reins deny` call this
+ * so the audit trail shows not just that a call was held, but what became of
+ * it. Matched by hold_id, and only the still-unresolved row — a hold_id is
+ * only ever recorded once (retries of the same park don't add rows, see
+ * preTool's `existed` check), so this updates exactly the row it parked.
+ */
+export function resolveDecision(db: SqlDb, input: ResolveDecisionInput): void {
+  withRetry(() =>
+    db
+      .prepare(
+        `UPDATE decisions SET resolution = ?, resolver = ?, resolved_ts = ?
+         WHERE hold_id = ? AND resolution IS NULL`,
+      )
+      .run(input.resolution, input.resolver, input.resolved_ts, input.hold_id),
+  );
+}
+
+export interface DecisionListRow {
+  id: number;
+  session_id: string;
+  ts: string;
+  tool: string;
+  input_summary: string;
+  input_hash: string;
+  rule_id: string;
+  rule_reason: string;
+  decision: string;
+  resolution: string | null;
+  resolver: string | null;
+  resolved_ts: string | null;
+  hold_id: string | null;
+}
+
+/** Chronological gate decisions, optionally scoped to one session. */
+export function listDecisions(
+  db: SqlDb,
+  opts: { sessionId?: string; limit?: number } = {},
+): DecisionListRow[] {
+  const limit = opts.limit ?? 500;
+  if (opts.sessionId) {
+    return db
+      .prepare(`SELECT * FROM decisions WHERE session_id = ? ORDER BY ts ASC, id ASC LIMIT ?`)
+      .all(opts.sessionId, limit) as DecisionListRow[];
+  }
+  return db
+    .prepare(`SELECT * FROM decisions ORDER BY ts ASC, id ASC LIMIT ?`)
+    .all(limit) as DecisionListRow[];
 }

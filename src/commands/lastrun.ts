@@ -1,4 +1,4 @@
-import { openDbReadOnly, matchSessions } from "../db";
+import { openDbReadOnly, matchSessions, listDecisions } from "../db";
 import { capabilityNote } from "../store";
 import { c } from "./format";
 import { truncate, summarizeToolInput } from "../util";
@@ -61,8 +61,37 @@ export function cmdLastrun(args: string[]): number {
   printTrajectory(calls, threshold);
   console.log("");
   printSummary(calls, threshold);
+  printDecisions(db, session.id);
   printAwaiting(session.id);
   return 0;
+}
+
+/**
+ * A few-line rollup of the gate decisions table (deny/ask/hold/allow), not a
+ * dump — `reins audit` is where the full chronological trail lives. Best-
+ * effort read: an older runs.db without the decisions table (or any read
+ * failure) just means the section is skipped.
+ */
+function printDecisions(db: ReturnType<typeof openDbReadOnly>, sessionId: string): void {
+  if (!db) return;
+  let rows: ReturnType<typeof listDecisions>;
+  try {
+    rows = listDecisions(db, { sessionId });
+  } catch {
+    return;
+  }
+  if (rows.length === 0) return;
+  console.log("");
+  console.log(c.bold("Gate decisions") + c.dim(`  (reins audit ${sessionId} for the full trail)`));
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.decision, (counts.get(r.decision) ?? 0) + 1);
+  const order = ["deny", "ask", "hold", "allow"];
+  const parts = order.filter((d) => counts.has(d)).map((d) => `${counts.get(d)} ${d}`);
+  console.log(`  ${parts.join(c.dim(" · "))}`);
+  const unresolved = rows.filter((r) => r.decision === "hold" && !r.resolution).length;
+  if (unresolved > 0) {
+    console.log(c.dim(`  ${unresolved} hold${unresolved === 1 ? "" : "s"} still awaiting a decision`));
+  }
 }
 
 /**

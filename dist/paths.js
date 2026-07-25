@@ -39,6 +39,7 @@ exports.reinsDir = reinsDir;
 exports.ensureReinsDir = ensureReinsDir;
 exports.steeringPath = steeringPath;
 exports.guardsPath = guardsPath;
+exports.policyPath = policyPath;
 exports.configPath = configPath;
 exports.dbPath = dbPath;
 const path = __importStar(require("node:path"));
@@ -102,6 +103,13 @@ function steeringPath(payloadCwd) {
 }
 function guardsPath(payloadCwd) {
     return path.join(reinsDir(payloadCwd), "guards.json");
+}
+/** Policy file v1: guards.json evolved into policy.json (superset schema —
+ *  `expires`, `tool` rules). Canonical target for all writes. `guardsPath`
+ *  above is kept around forever as the pre-0.3 fallback read path — see
+ *  `loadGuards` in guards.ts. */
+function policyPath(payloadCwd) {
+    return path.join(reinsDir(payloadCwd), "policy.json");
 }
 function configPath(payloadCwd) {
     return path.join(reinsDir(payloadCwd), "config.json");

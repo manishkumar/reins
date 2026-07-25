@@ -37,6 +37,10 @@ async function main(): Promise<number> {
       const { cmdLastrun } = await import("./commands/lastrun");
       return cmdLastrun(rest);
     }
+    case "audit": {
+      const { cmdAudit } = await import("./commands/audit");
+      return cmdAudit(rest);
+    }
     case "loops": {
       const { cmdLoops } = await import("./commands/loops");
       return cmdLoops();
@@ -155,6 +159,8 @@ USAGE
   reins approve <id>               Approve a parked action (one-shot, exact input)
   reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead
   reins lastrun [session-prefix]   Readable account of the most recent run
+  reins audit [session-prefix]     Chronological trail of gate decisions (deny/ask/hold/allow)
+  reins audit [session] --json     Same trail as raw JSON, for scripting
   reins sessions                   List recent sessions in this project
   reins watch                      Live cockpit: all agents, steer any one
   reins report [--open]            Write a local HTML report of every run

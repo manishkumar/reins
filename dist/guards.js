@@ -34,12 +34,15 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_RULES = void 0;
+exports.policySource = policySource;
 exports.loadGuards = loadGuards;
 exports.saveGuards = saveGuards;
 exports.globToRegExp = globToRegExp;
 exports.matchesPathGlob = matchesPathGlob;
+exports.isExpired = isExpired;
 exports.stripQuoted = stripQuoted;
 exports.checkGuards = checkGuards;
+exports.validateRules = validateRules;
 const fs = __importStar(require("node:fs"));
 const paths_1 = require("./paths");
 // A small, sane default denylist. Hard vetoes only — things almost no run
@@ -105,22 +108,43 @@ exports.DEFAULT_RULES = [
         reason: "Modifying .git internals is blocked by a reins guard.",
     },
 ];
-function loadGuards(payloadCwd) {
+/** Read+parse one rules file. Returns null on anything wrong (missing, bad
+ *  JSON, `rules` not an array) — the caller falls back, never crashes. */
+function readRulesFile(file) {
     try {
-        const raw = fs.readFileSync((0, paths_1.guardsPath)(payloadCwd), "utf8");
+        const raw = fs.readFileSync(file, "utf8");
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed.rules))
-            return { rules: [...exports.DEFAULT_RULES] };
+            return null;
         return parsed;
     }
     catch {
-        // No file yet => ship the defaults so guards work out of the box.
-        return { rules: [...exports.DEFAULT_RULES] };
+        return null;
     }
+}
+/** Which file is actually backing the active policy — for `reins doctor`. */
+function policySource(payloadCwd) {
+    if (readRulesFile((0, paths_1.policyPath)(payloadCwd)))
+        return "policy.json";
+    if (readRulesFile((0, paths_1.guardsPath)(payloadCwd)))
+        return "guards.json";
+    return "defaults";
+}
+function loadGuards(payloadCwd) {
+    // policy.json is canonical. guards.json (pre-0.3) keeps working forever —
+    // an existing install must never break just because the name changed.
+    // Neither present/valid => ship the defaults so guards work out of the box.
+    return (readRulesFile((0, paths_1.policyPath)(payloadCwd)) ??
+        readRulesFile((0, paths_1.guardsPath)(payloadCwd)) ??
+        { rules: [...exports.DEFAULT_RULES] });
 }
 function saveGuards(guards, payloadCwd) {
     (0, paths_1.ensureReinsDir)(payloadCwd);
-    fs.writeFileSync((0, paths_1.guardsPath)(payloadCwd), JSON.stringify(guards, null, 2) + "\n");
+    // Always write the canonical file. If only guards.json existed, this IS the
+    // one-time migration: policy.json now exists alongside it, and guards.json
+    // is left in place untouched — it's the user's file, never delete it out
+    // from under them.
+    fs.writeFileSync((0, paths_1.policyPath)(payloadCwd), JSON.stringify(guards, null, 2) + "\n");
 }
 // Translate a minimal glob into a fully-anchored RegExp.
 //   `*` and `?`         match within a single path segment (never cross "/").
@@ -191,6 +215,26 @@ function pathsFromInput(input) {
     return out;
 }
 /**
+ * True if `rule.expires` has passed, so it should be treated as absent at
+ * match time. A date-only value (the expected case, e.g. "2026-08-01") is
+ * read as "valid through the end of that day" (UTC) rather than the instant
+ * of midnight — the more forgiving reading of a human-picked date.
+ *
+ * A value that fails to parse is NOT expired — the rule stays ACTIVE. That's
+ * the fail-open direction: a typo in a date must not silently remove a guard
+ * the user believes is protecting them. `validateRules` reports the typo as a
+ * real error so it doesn't go unnoticed instead.
+ */
+function isExpired(rule, now = new Date()) {
+    if (!rule.expires)
+        return false;
+    const t = Date.parse(rule.expires);
+    if (Number.isNaN(t))
+        return false; // malformed => not expired (fail-open toward still guarding)
+    const endOfDay = t + 24 * 60 * 60 * 1000 - 1;
+    return now.getTime() > endOfDay;
+}
+/**
  * Remove quoted string literals from a command before guard matching, so a
  * pattern mentioned inside an ARGUMENT (e.g. `git commit -m "removed rm -rf"`,
  * `echo "DROP TABLE"`) is not falsely blocked. Quoted text is data, not an
@@ -206,6 +250,8 @@ function stripQuoted(cmd) {
 function checkGuards(guards, toolName, toolInput) {
     const input = (toolInput ?? {});
     for (const rule of guards.rules) {
+        if (isExpired(rule))
+            continue; // expired rule = absent, as if never written
         if (rule.type === "bash") {
             if (toolName !== "Bash")
                 continue;
@@ -240,6 +286,120 @@ function checkGuards(guards, toolName, toolInput) {
                     return { rule };
             }
         }
+        else if (rule.type === "tool") {
+            // NAME glob against the tool itself (e.g. `mcp__stripe__*`, `WebFetch`) —
+            // where MCP tools live, and where bash/path matching can't reach them.
+            // Reuses globToRegExp directly (no suffix matching): tool names have no
+            // path segments, and case sensitivity here is deliberate — tool names
+            // are exact identifiers, not user-typed paths.
+            let re;
+            try {
+                re = globToRegExp(rule.pattern);
+            }
+            catch {
+                continue;
+            }
+            if (re.test(toolName))
+                return { rule };
+        }
     }
     return null;
+}
+// Patterns that match (almost) any input — the rule "works" but guards
+// nothing in particular, which is almost always a mistake rather than intent.
+const TRIVIAL_PATTERNS = new Set([".*", ".", "*", "**"]);
+/**
+ * Validate rules for `reins doctor`. Read-only and never throws — a bad rule
+ * is reported here, not crashed on; matching itself already fails open
+ * (skips) around these same defects, so this is the loud complaint that
+ * compensates for that quiet skip.
+ *
+ * Severity: "error" means the rule is broken or misconfigured in a way that's
+ * never intentional (bad regex/glob, unknown type/action, duplicate id,
+ * missing reason, unparsable expires) — these count toward doctor's exit
+ * code. "warning" means the rule works exactly as written but the write may
+ * not be what the human wants (an already-expired rule, a headless-hostile
+ * `ask`, a pattern broad enough to match everything) — informational, no
+ * exit-code impact, matching doctor's existing convention of not failing the
+ * process over things that aren't actually broken.
+ */
+function validateRules(rules) {
+    const problems = [];
+    const seenIds = new Set();
+    for (const rule of rules) {
+        const ruleId = rule.id || "(missing id)";
+        if (rule.id) {
+            if (seenIds.has(rule.id)) {
+                problems.push({ ruleId, severity: "error", message: `duplicate rule id "${rule.id}"` });
+            }
+            seenIds.add(rule.id);
+        }
+        if (rule.type !== "bash" && rule.type !== "path" && rule.type !== "tool") {
+            problems.push({
+                ruleId,
+                severity: "error",
+                message: `unknown type "${String(rule.type)}" (expected bash, path, or tool)`,
+            });
+        }
+        else if (rule.type === "bash") {
+            try {
+                new RegExp(rule.pattern);
+            }
+            catch (e) {
+                problems.push({ ruleId, severity: "error", message: `invalid regex: ${e.message}` });
+            }
+        }
+        else {
+            try {
+                globToRegExp(rule.pattern);
+            }
+            catch (e) {
+                problems.push({ ruleId, severity: "error", message: `invalid glob: ${e.message}` });
+            }
+        }
+        if (rule.action !== undefined &&
+            rule.action !== "deny" &&
+            rule.action !== "ask" &&
+            rule.action !== "hold") {
+            problems.push({
+                ruleId,
+                severity: "error",
+                message: `unknown action "${String(rule.action)}" (expected deny, ask, or hold)`,
+            });
+        }
+        if (!rule.reason || !rule.reason.trim()) {
+            problems.push({ ruleId, severity: "error", message: "missing reason" });
+        }
+        if (rule.expires !== undefined) {
+            if (Number.isNaN(Date.parse(rule.expires))) {
+                problems.push({
+                    ruleId,
+                    severity: "error",
+                    message: `malformed expires "${rule.expires}" — treated as ACTIVE (fail-open); fix or remove it`,
+                });
+            }
+            else if (isExpired(rule)) {
+                problems.push({
+                    ruleId,
+                    severity: "warning",
+                    message: `expired ${rule.expires} — inactive, skipped at match time`,
+                });
+            }
+        }
+        if (TRIVIAL_PATTERNS.has(rule.pattern.trim())) {
+            problems.push({
+                ruleId,
+                severity: "warning",
+                message: `pattern "${rule.pattern}" matches everything — almost certainly too broad`,
+            });
+        }
+        if (rule.action === "ask") {
+            problems.push({
+                ruleId,
+                severity: "warning",
+                message: "ask cannot prompt anyone in a headless/non-interactive run — it effectively denies there",
+            });
+        }
+    }
+    return problems;
 }

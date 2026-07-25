@@ -37,8 +37,8 @@ will never see. That is the frame for everything below.
    code in `src/`, or "no". SQLite is `node:sqlite` (optional, Node ≥ 22.5); steering,
    guards, and holds must keep working without it. Which is why:
 
-4. **The control plane is plain files, not the DB.** Steering queue, guard rules, hold
-   queue, and allowances live as files under `.reins/`. The DB is capture only — a
+4. **The control plane is plain files, not the DB.** Steering queue, policy rules, hold
+   queue, and filed decisions live as files under `.reins/`. The DB is capture only — a
    byproduct. No steering/guard/hold decision may ever depend on the DB being available.
 
 5. **PreToolUse order is deliberate:** guard (short-circuits) → steering (injected once,
@@ -47,11 +47,27 @@ will never see. That is the frame for everything below.
 6. **A queued steer is never silently lost.** If there is no next tool call, the Stop
    hook delivers it. Any refactor of steering must preserve this delivery guarantee.
 
-7. **Approvals are one-shot and keyed by exact input hash.** `reins approve` lets the
-   *identical* call through, once. Widening this — prefix matching, per-rule blanket
-   allows, TTLs — is a security regression dressed as a UX improvement. Don't.
+7. **Approvals are one-shot and bound to one proposal.** A deferred hold is bound to the
+   exact call (`tool_use_id`, replayed by Claude Code on resume); a denied hold is bound
+   to the identical input, scoped to the session that proposed it. Either way `reins
+   approve` clears *one* call, once. Widening this — prefix matching, per-rule blanket
+   allows, TTLs, unscoped hash keys — is a security regression dressed as a UX
+   improvement. Don't.
 
-8. **`reins init` merges into `.claude/settings.json`, never clobbers it**, and
+8. **A hold must actually hold, or say it didn't.** `defer` is the better transport (the
+   real call is preserved and replayed, so approval doesn't depend on the agent
+   reconstructing it) but Claude Code honors it *only in print mode* and *only for a solo
+   tool call*, and ignores it silently otherwise. So `src/defer.ts` demands **positive
+   evidence** of print mode — it reads the argv of the Claude Code process itself
+   (`CLAUDE_PID`), the same input Claude Code judged itself by — and answers "no"
+   otherwise, falling back to the deny transport that works everywhere. Do not swap that
+   for a cheaper proxy: `CLAUDE_CODE_ENTRYPOINT` was tried and is wrong in both
+   directions (a real `-p` run can report `claude-vscode`; an interactive session can
+   inherit `sdk-cli`). PostToolUse independently reports any parked action that executed
+   anyway as a HOLD BREACH. A hold that quietly stopped holding is the worst bug this
+   project can ship.
+
+9. **`reins init` merges into `.claude/settings.json`, never clobbers it**, and
    `reins uninstall` removes exactly what init added.
 
 ## Judgment calls that keep recurring

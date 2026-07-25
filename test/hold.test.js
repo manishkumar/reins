@@ -15,6 +15,14 @@ const CLI = path.join(__dirname, "..", "dist", "cli.js");
 function tmpProject() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reins-hold-"));
   fs.mkdirSync(path.join(dir, ".reins"), { recursive: true });
+  // These tests cover the deny transport, so pin it rather than letting the
+  // environment decide (see src/defer.ts): otherwise running `npm test` from
+  // inside a `claude -p` session would silently change what is under test.
+  // The defer transport has its own suite in test/defer.test.js.
+  fs.writeFileSync(
+    path.join(dir, ".reins", "config.json"),
+    JSON.stringify({ holdTransport: "deny" }),
+  );
   return dir;
 }
 
@@ -216,7 +224,7 @@ test("deny without --steer queues nothing", () => {
 test("guard add --hold persists action hold; list shows it", () => {
   const dir = tmpProject();
   runCli(["guard", "add", "bash", "npm\\s+publish", "--hold"], dir);
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, ".reins", "guards.json"), "utf8"));
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, ".reins", "policy.json"), "utf8"));
   const rule = saved.rules.find((r) => r.pattern === "npm\\s+publish");
   assert.strictEqual(rule.action, "hold");
   assert.match(runCli(["guard", "list"], dir), /hold/);

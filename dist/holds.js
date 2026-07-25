@@ -38,9 +38,11 @@ exports.listPending = listPending;
 exports.pendingForSession = pendingForSession;
 exports.findPending = findPending;
 exports.removePending = removePending;
-exports.writeAllowance = writeAllowance;
-exports.consumeAllowance = consumeAllowance;
+exports.writeDecision = writeDecision;
+exports.consumeDecision = consumeDecision;
 exports.formatHoldReason = formatHoldReason;
+exports.formatDeferReason = formatDeferReason;
+exports.formatRefusalReason = formatRefusalReason;
 const crypto = __importStar(require("node:crypto"));
 const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
@@ -48,7 +50,15 @@ const paths_1 = require("./paths");
 function pendingDir(payloadCwd) {
     return path.join((0, paths_1.reinsDir)(payloadCwd), "pending");
 }
-function allowedDir(payloadCwd) {
+/** Decisions awaiting collection by the agent's next attempt (approved AND
+ *  refused). Named "decided", not "allowed", because a refusal is a decision
+ *  the boundary must also honor exactly once. */
+function decidedDir(payloadCwd) {
+    return path.join((0, paths_1.reinsDir)(payloadCwd), "decided");
+}
+/** Pre-0.4 one-shot approvals: .reins/allowed/<input_hash>.json. Still read, so
+ *  upgrading reins mid-run never strands an approval the human already gave. */
+function legacyAllowedDir(payloadCwd) {
     return path.join((0, paths_1.reinsDir)(payloadCwd), "allowed");
 }
 /** 0700 like .reins itself: a pending action's input can contain secrets. */
@@ -63,7 +73,12 @@ function ensureDir(dir, payloadCwd) {
  * a new one.
  */
 function parkAction(payloadCwd, action) {
-    const existing = listPending(payloadCwd).find((p) => p.session_id === action.session_id && p.input_hash === action.input_hash);
+    const existing = listPending(payloadCwd).find((p) => p.session_id === action.session_id &&
+        // A replayed deferred call is literally the same call, id and all. Any
+        // other retry is recognized by its form.
+        (action.tool_use_id && p.tool_use_id
+            ? p.tool_use_id === action.tool_use_id
+            : p.input_hash === action.input_hash));
     if (existing)
         return { id: existing.id, existed: true };
     const id = crypto.randomBytes(4).toString("hex");
@@ -112,32 +127,83 @@ function removePending(payloadCwd, id) {
         /* already gone */
     }
 }
-/** Write the one-shot allowance for a parked action (the "approve" half). */
-function writeAllowance(payloadCwd, action) {
-    ensureDir(allowedDir(payloadCwd), payloadCwd);
-    const allowance = {
+/**
+ * The key a decision is filed under — and the whole reason defer is better than
+ * deny. A deferred call comes back with the SAME tool_use_id, so its approval
+ * is keyed to that one call and nothing else can spend it. A denied-and-retried
+ * call gets a fresh tool_use_id, so it can only be recognized by its form: the
+ * exact input hash, scoped to the session that proposed it (an unscoped hash
+ * key let a second session consume the first's approval).
+ */
+function decisionKey(d) {
+    if (d.transport === "defer" && d.tool_use_id)
+        return "u-" + d.tool_use_id;
+    return "h-" + shortHash(d.session_id) + "-" + d.input_hash;
+}
+function shortHash(s) {
+    return crypto.createHash("sha256").update(s).digest("hex").slice(0, 8);
+}
+/** Record a human's answer for the agent to collect at the boundary. */
+function writeDecision(payloadCwd, action, resolution, steer) {
+    ensureDir(decidedDir(payloadCwd), payloadCwd);
+    const decision = {
         action_id: action.id,
         session_id: action.session_id,
         tool: action.tool,
         input_hash: action.input_hash,
+        tool_use_id: action.tool_use_id,
+        transport: action.transport,
         rule_id: action.rule_id,
-        approved_ts: new Date().toISOString(),
+        resolution,
+        ...(steer ? { steer } : {}),
+        decided_ts: new Date().toISOString(),
     };
-    fs.writeFileSync(path.join(allowedDir(payloadCwd), action.input_hash + ".json"), JSON.stringify(allowance, null, 2) + "\n");
+    fs.writeFileSync(path.join(decidedDir(payloadCwd), decisionKey(action) + ".json"), JSON.stringify(decision, null, 2) + "\n");
 }
 /**
- * Atomically consume the allowance for this exact input hash, if one exists.
- * Rename-first (same trick as steering) so two agents racing on the identical
- * call can't both spend a one-shot approval.
+ * Atomically consume the decision for this attempt, if a human left one.
+ * Rename-first (the same trick as steering) so two agents racing on the
+ * identical call can't both spend a one-shot answer.
+ *
+ * Tried in order: this exact deferred call (tool_use_id), then this session's
+ * identical proposal (hash), then a pre-0.4 unscoped allowance. First match
+ * wins and is consumed.
  */
-function consumeAllowance(payloadCwd, inputHash) {
-    const p = path.join(allowedDir(payloadCwd), inputHash + ".json");
+function consumeDecision(payloadCwd, attempt) {
+    const candidates = [];
+    if (attempt.tool_use_id) {
+        candidates.push(path.join(decidedDir(payloadCwd), "u-" + attempt.tool_use_id + ".json"));
+    }
+    candidates.push(path.join(decidedDir(payloadCwd), "h-" + shortHash(attempt.session_id) + "-" + attempt.input_hash + ".json"));
+    for (const p of candidates) {
+        const taken = takeJson(p);
+        if (taken)
+            return taken;
+    }
+    // Legacy: a one-shot approval written by reins < 0.4, keyed by bare hash.
+    const legacy = takeJson(path.join(legacyAllowedDir(payloadCwd), attempt.input_hash + ".json"));
+    if (legacy) {
+        return {
+            action_id: legacy.action_id,
+            session_id: legacy.session_id,
+            tool: legacy.tool,
+            input_hash: attempt.input_hash,
+            transport: "deny",
+            rule_id: legacy.rule_id,
+            resolution: "approved",
+            decided_ts: new Date().toISOString(),
+        };
+    }
+    return null;
+}
+/** Consume one JSON file atomically: rename out of the way, then read. */
+function takeJson(p) {
     const tmp = p + ".consuming." + process.pid;
     try {
         fs.renameSync(p, tmp);
     }
     catch {
-        return null; // no allowance for this hash
+        return null; // nothing filed here
     }
     try {
         return JSON.parse(fs.readFileSync(tmp, "utf8"));
@@ -167,4 +233,26 @@ function formatHoldReason(id, ruleReason) {
         `until the developer approves it (\`reins approve ${id}\`). Do not retry it now: ` +
         `continue with work that does not depend on it, and mention the parked action ` +
         `(with its id) when you report back. If nothing else remains, finish and note it.`);
+}
+/**
+ * The reason attached to a deferred hold. Unlike the deny reason above, this is
+ * not a redirection: on defer the turn ends with the call still pending, so
+ * there is no agent left mid-run to send elsewhere. It is written for the human
+ * reading `reins pending` and the transcript afterwards.
+ */
+function formatDeferReason(id, ruleReason) {
+    return (ruleReason +
+        ` [reins hold] Parked for approval (id ${id}). The tool call is preserved as-is; ` +
+        `\`reins approve ${id}\` then resuming the session runs this exact call.`);
+}
+/**
+ * What the agent is told when it comes back for an action a human refused. It
+ * carries the refusal (so the model stops proposing it) plus any alternative
+ * the human supplied — this is the gate's reply channel, delivered at the
+ * boundary rather than left to a steer that may never be consumed.
+ */
+function formatRefusalReason(id, ruleReason, steer) {
+    return (ruleReason +
+        ` [reins hold] The developer refused this action (id ${id}); do not propose it again.` +
+        (steer ? ` Instead: ${steer}` : ""));
 }

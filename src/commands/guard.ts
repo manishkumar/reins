@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import { loadGuards, saveGuards, globToRegExp, DEFAULT_RULES, GuardRule, GuardType } from "../guards";
+import { loadGuards, saveGuards, globToRegExp, isExpired, DEFAULT_RULES, GuardRule, GuardType } from "../guards";
 import { c } from "./format";
 
 export function cmdGuard(args: string[]): number {
@@ -30,23 +30,33 @@ function list(): number {
   }
   console.log(c.bold("Guard rules — deny is a hard veto; ask escalates to you; hold parks for later:"));
   for (const r of guards.rules) {
-    const tag = r.type === "bash" ? c.magenta("bash ") : c.blue("path ");
+    const tag =
+      r.type === "bash" ? c.magenta("bash ") : r.type === "path" ? c.blue("path ") : c.cyan("tool ");
     const action =
       r.action === "ask" ? c.yellow("ask ") : r.action === "hold" ? c.cyan("hold") : c.red("deny");
     console.log(`  ${c.dim(r.id.padEnd(20))} ${tag} ${action} ${c.cyan(r.pattern)}`);
     console.log(`  ${" ".repeat(20)}            ${c.dim(r.reason)}`);
+    if (r.expires) {
+      const expired = isExpired(r);
+      const label = expired ? c.red(`expired ${r.expires} — inactive`) : c.dim(`expires ${r.expires}`);
+      console.log(`  ${" ".repeat(20)}            ${label}`);
+    }
   }
   return 0;
 }
 
 function add(args: string[]): number {
   const type = args[0] as GuardType;
-  if (type !== "bash" && type !== "path") {
-    console.error(c.red("Usage: reins guard add <bash|path> <pattern> [--ask|--hold] [--reason \"...\"]"));
+  if (type !== "bash" && type !== "path" && type !== "tool") {
+    console.error(
+      c.red("Usage: reins guard add <bash|path|tool> <pattern> [--ask|--hold] [--reason \"...\"] [--expires <date>]"),
+    );
     console.error(c.dim("  bash <regex>  matches the command of a Bash tool call"));
     console.error(c.dim("  path <glob>   matches file paths (e.g. **/.env, secrets/**)"));
+    console.error(c.dim("  tool <glob>   matches the TOOL NAME itself (e.g. mcp__stripe__*, WebFetch)"));
     console.error(c.dim("  --ask         escalate to you (permission prompt) instead of hard-denying"));
     console.error(c.dim("  --hold        park the action for async approval (reins pending/approve/deny)"));
+    console.error(c.dim("  --expires     ISO-8601 date (e.g. 2026-08-01); rule goes inactive after that day"));
     return 1;
   }
   const ask = args.includes("--ask");
@@ -55,6 +65,17 @@ function add(args: string[]): number {
   if (ask && hold) {
     console.error(c.red("Pick one hardness: --ask (interactive prompt) or --hold (async queue)."));
     return 1;
+  }
+  const expiresIdx = args.findIndex((a) => a === "--expires");
+  let expires: string | undefined;
+  if (expiresIdx >= 0) {
+    expires = args[expiresIdx + 1];
+    if (!expires || Number.isNaN(Date.parse(expires))) {
+      console.error(c.red("Invalid --expires date: ") + c.dim(String(expires)));
+      console.error(c.dim("  (expects ISO-8601, e.g. --expires 2026-08-01)"));
+      return 1;
+    }
+    args = [...args.slice(0, expiresIdx), ...args.slice(expiresIdx + 2)];
   }
   const reasonIdx = args.findIndex((a) => a === "--reason" || a === "-r");
   let reason = "";
@@ -88,7 +109,7 @@ function add(args: string[]): number {
   }
   if (!reason) {
     const subject =
-      type === "bash" ? `Command matching /${pattern}/` : `Touching ${pattern}`;
+      type === "bash" ? `Command matching /${pattern}/` : type === "path" ? `Touching ${pattern}` : `Tool ${pattern}`;
     reason =
       ask || hold
         ? `${subject} needs your approval (reins guard).`
@@ -100,11 +121,13 @@ function add(args: string[]): number {
   const rule: GuardRule = { id, type, pattern, reason };
   if (ask) rule.action = "ask"; // absent = deny; keeps pre-0.2 files byte-stable
   if (hold) rule.action = "hold";
+  if (expires) rule.expires = expires;
   guards.rules.push(rule);
   saveGuards(guards);
   console.log(
     c.green(`✓ Added guard ${c.bold(id)}`) +
-      (ask ? c.yellow(" (ask)") : hold ? c.cyan(" (hold)") : ""),
+      (ask ? c.yellow(" (ask)") : hold ? c.cyan(" (hold)") : "") +
+      (expires ? c.dim(` (expires ${expires})`) : ""),
   );
   console.log(`  ${rule.type} ${c.cyan(rule.pattern)} — ${c.dim(rule.reason)}`);
   if (hold) {

@@ -49,6 +49,11 @@ const BAD = format_1.c.red("✗");
 /** Diagnose a reins setup. The first thing to run when something seems off. */
 function cmdDoctor() {
     let problems = 0;
+    // Things worth showing that are not faults: an expired rule doing exactly
+    // what it was told to, a broad pattern, holds waiting for you. They print a
+    // "!" like problems do, so the summary counts them separately rather than
+    // showing a "!" line the total silently ignores.
+    let notes = 0;
     const line = (sym, label, detail) => console.log(`  ${sym} ${label.padEnd(22)} ${format_1.c.dim(detail)}`);
     console.log(format_1.c.bold("reins doctor") + format_1.c.dim("  (cwd: " + process.cwd() + ")"));
     console.log("");
@@ -76,17 +81,43 @@ function cmdDoctor() {
             problems++;
             line(BAD, "writable", "NO — guards/steering/capture cannot persist state");
         }
-        const guards = (0, guards_1.loadGuards)();
-        line(OK, "guard rules", `${guards.rules.length} active`);
         line(OK, "loop threshold", String((0, config_1.loadConfig)().loopThreshold));
         const pending = (0, steering_1.peekSteering)();
+        if (pending)
+            notes++;
         line(pending ? WARN : OK, "pending steering", pending ? `"${pending}"` : "none");
         const holds = (0, holds_1.listPending)().length;
+        if (holds > 0)
+            notes++;
         line(holds > 0 ? WARN : OK, "pending holds", holds > 0 ? `${holds} awaiting approval — reins pending` : "none");
     }
     else {
         problems++;
         line(WARN, ".reins dir", "not initialized — run `reins init`");
+    }
+    // Policy (guards)
+    console.log("");
+    console.log(format_1.c.bold("Policy"));
+    const source = (0, guards_1.policySource)();
+    const sourceLabel = source === "defaults" ? "built-in defaults (no policy.json or guards.json)" : `.reins/${source}`;
+    line(OK, "source", sourceLabel);
+    const guards = (0, guards_1.loadGuards)();
+    line(OK, "rule count", `${guards.rules.length}`);
+    const policyProblems = (0, guards_1.validateRules)(guards.rules);
+    const errors = policyProblems.filter((p) => p.severity === "error");
+    const warnings = policyProblems.filter((p) => p.severity === "warning");
+    if (policyProblems.length === 0) {
+        line(OK, "rules", "no problems found");
+    }
+    else {
+        for (const p of errors) {
+            problems++;
+            line(BAD, `rule ${p.ruleId}`, p.message);
+        }
+        for (const p of warnings) {
+            notes++;
+            line(WARN, `rule ${p.ruleId}`, p.message);
+        }
     }
     // Hook wiring
     console.log("");
@@ -103,11 +134,14 @@ function cmdDoctor() {
     line(OK, "invoked as", process.argv[1] || "?");
     line(OK, "note", "hooks call bare `reins` — it must be on PATH for every shell Claude Code spawns");
     console.log("");
+    const noteSuffix = notes > 0 ? format_1.c.dim(` (${notes} note${notes === 1 ? "" : "s"} above)`) : "";
     if (problems === 0) {
-        console.log(OK + format_1.c.green(" Everything looks good."));
+        console.log(OK + format_1.c.green(" Everything looks good.") + noteSuffix);
     }
     else {
-        console.log(WARN + format_1.c.yellow(` ${problems} thing${problems === 1 ? "" : "s"} to look at above.`));
+        console.log(WARN +
+            format_1.c.yellow(` ${problems} thing${problems === 1 ? "" : "s"} to look at above.`) +
+            noteSuffix);
     }
     return problems === 0 ? 0 : 1;
 }

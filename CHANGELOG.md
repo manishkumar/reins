@@ -27,6 +27,67 @@ All notable changes to `reins` are documented here. Format loosely follows
   keyed by the real session id, so no control-plane decision ever depends on
   a name resolving. Resolution precedence is exact id → id prefix → custom
   name → mnemonic, so an id prefix can never be shadowed by a name.
+- **Hold now uses Claude Code's native `defer`.** Where Claude Code is verified to
+  honor it (print mode: `claude -p` / the SDK), a hold rule returns
+  `permissionDecision: "defer"` instead of denying — Claude Code parks the
+  *actual tool call* in the session (the turn ends with `stop_reason:
+  "tool_deferred"`), and resuming the session (`claude --resume <id> -p
+  "continue"`) replays that exact call through the hook. Approving now runs
+  the ORIGINAL proposal instead of asking the agent to reconstruct a retry.
+  reins only picks defer when it can confirm the run is headless (`claude -p`
+  / the SDK) — positive evidence, not a guess — and falls back everywhere
+  else, including Windows or whenever it can't tell, to the previous
+  deny-and-queue transport, which still works anywhere. Two honest limits,
+  both documented in the README: defer is **print-mode only** (an interactive
+  terminal session silently discards it) and **solo-call only** (ignored when
+  the model emitted several tool calls in one assistant message). Override
+  the pick with `"holdTransport":
+  "auto"|"defer"|"deny"` in `.reins/config.json`.
+- **HOLD BREACH detection.** The solo-call limit above is invisible to the
+  `PreToolUse` hook, so `PostToolUse` now checks the queue from the far side:
+  if an action that's still parked for approval executed anyway, it's
+  reported loudly on stderr and recorded, visible in `reins audit`. Detection,
+  not prevention — the action already ran by the time it's caught.
+- **`reins audit [session] [--json]`.** Every gate decision (deny / ask /
+  hold / allow / breach) for a session, in order, with the rule that fired,
+  how it was ultimately resolved, and who resolved it. `--json` emits the raw
+  rows for scripting. `reins lastrun` gained a decisions rollup. Backed by a
+  new `decisions` table in `runs.db` — capture only, never gates anything.
+- **`policy.json`.** `guards.json` (pre-0.3) keeps loading forever; the first
+  save upgrades to the new name in place without touching the old file.
+  Rules gain an optional `expires` (an expired rule is simply inactive, not
+  deleted) and a new `tool` rule type matching tool-name globs like
+  `mcp__stripe__*` — for MCP tools, which bash/path rules can't reach.
+  `reins doctor` now validates the policy file: bad regex/glob, unknown
+  type/action, duplicate ids, a malformed `expires`, and foot-guns like an
+  overly-broad pattern or an `--ask` rule in a headless setup.
+- **`SPEC.md`** — the file convention behind guards/steering/holds, written up
+  separately and vendor-neutral, for anyone who wants the same gate outside
+  Claude Code. Linked from the README's "How it works" section.
+
+### Changed
+- **Hold transport is chosen automatically, not fixed to deny.** A hold rule's
+  actual mechanism (`defer` vs. deny-and-queue) now depends on the
+  environment reins is running in rather than always being deny-and-queue;
+  see "Added" above. `reins pending` marks deferred entries a later deferred
+  hold in the same session has superseded, since Claude Code only replays the
+  newest on resume.
+- **Refusals are delivered at the boundary.** `reins deny <id> [--steer
+  "..."]` now files the refusal so the agent (or the resumed session) is told
+  the moment it comes back for that exact action, instead of the action
+  silently re-parking forever with no record of having been refused.
+- **`.reins/allowed/` renamed to `.reins/decided/`**, and now holds refusals
+  as well as approvals (a refusal has to be recorded too, or a replayed
+  denied call just re-parks and asks the same question forever). Pre-0.4
+  `allowed/` files are still read, so upgrading reins mid-run strands no
+  approval a human already gave.
+
+### Fixed
+- **A deny-transport hold approval is now scoped to the session that proposed
+  it.** Previously a one-shot allowance was keyed only on the input hash, so
+  a second session running the identical command could spend the first
+  session's approval. It's now additionally keyed to the proposing session,
+  closing that gap.
 
 ## [0.3.0]
 

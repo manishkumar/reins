@@ -4,10 +4,16 @@ import { configPath } from "./paths";
 export interface ReinsConfig {
   /** Same tool+input repeated >= this many times triggers the loop alarm. */
   loopThreshold: number;
+  /** How a hold rule stops a call (see src/defer.ts).
+   *  "auto"  — defer where Claude Code honors it, deny everywhere else.
+   *  "deny"  — always deny-and-queue; the transport that works everywhere.
+   *  "defer" — always defer, skipping the environment check. */
+  holdTransport: "auto" | "defer" | "deny";
 }
 
 const DEFAULTS: ReinsConfig = {
   loopThreshold: 3,
+  holdTransport: "auto",
 };
 
 export function loadConfig(payloadCwd?: string): ReinsConfig {

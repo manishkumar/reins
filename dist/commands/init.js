@@ -50,12 +50,16 @@ function cmdInit(args) {
     // never a parent project found by walk-up.
     const here = process.cwd();
     const dir = (0, paths_1.ensureReinsDir)(here);
-    if (!fs.existsSync((0, paths_1.guardsPath)(here)))
+    // Only seed a fresh policy.json when NEITHER file exists — a pre-existing
+    // guards.json (older install) is left alone; init isn't the migration
+    // trigger, `reins guard add/remove` is (see saveGuards in guards.ts).
+    if (!fs.existsSync((0, paths_1.policyPath)(here)) && !fs.existsSync((0, paths_1.guardsPath)(here))) {
         (0, guards_1.saveGuards)((0, guards_1.loadGuards)(here), here);
+    }
     if (!fs.existsSync((0, paths_1.configPath)(here)))
         (0, config_1.saveConfig)((0, config_1.loadConfig)(here), here);
     console.log(format_1.c.green("✓ Initialized ") + format_1.c.dim(dir));
-    console.log(format_1.c.dim("  · guards.json   (default denylist — edit or use `reins guard`)"));
+    console.log(format_1.c.dim("  · policy.json   (default denylist — edit or use `reins guard`)"));
     console.log(format_1.c.dim("  · config.json   (loop threshold, etc.)"));
     console.log(format_1.c.dim("  · .gitignore    (the whole .reins dir is git-ignored)"));
     // Surface the capture capability up front — honest about Node compatibility.

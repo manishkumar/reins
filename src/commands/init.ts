@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ensureReinsDir, guardsPath, configPath } from "../paths";
+import { ensureReinsDir, guardsPath, policyPath, configPath } from "../paths";
 import { loadGuards, saveGuards } from "../guards";
 import { loadConfig, saveConfig } from "../config";
 import { settingsBlockJson } from "../settingsBlock";
@@ -16,11 +16,16 @@ export function cmdInit(args: string[]): number {
   // never a parent project found by walk-up.
   const here = process.cwd();
   const dir = ensureReinsDir(here);
-  if (!fs.existsSync(guardsPath(here))) saveGuards(loadGuards(here), here);
+  // Only seed a fresh policy.json when NEITHER file exists — a pre-existing
+  // guards.json (older install) is left alone; init isn't the migration
+  // trigger, `reins guard add/remove` is (see saveGuards in guards.ts).
+  if (!fs.existsSync(policyPath(here)) && !fs.existsSync(guardsPath(here))) {
+    saveGuards(loadGuards(here), here);
+  }
   if (!fs.existsSync(configPath(here))) saveConfig(loadConfig(here), here);
 
   console.log(c.green("✓ Initialized ") + c.dim(dir));
-  console.log(c.dim("  · guards.json   (default denylist — edit or use `reins guard`)"));
+  console.log(c.dim("  · policy.json   (default denylist — edit or use `reins guard`)"));
   console.log(c.dim("  · config.json   (loop threshold, etc.)"));
   console.log(c.dim("  · .gitignore    (the whole .reins dir is git-ignored)"));
 

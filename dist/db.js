@@ -14,6 +14,9 @@ exports.countSameHash = countSameHash;
 exports.countTrailingSameHash = countTrailingSameHash;
 exports.finalizeSession = finalizeSession;
 exports.insertOutcome = insertOutcome;
+exports.insertDecision = insertDecision;
+exports.resolveDecision = resolveDecision;
+exports.listDecisions = listDecisions;
 const paths_1 = require("./paths");
 const store_1 = require("./store");
 const names_1 = require("./names");
@@ -42,8 +45,25 @@ CREATE TABLE IF NOT EXISTS outcomes (
   stop_reason TEXT,
   gate_result TEXT
 );
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  ts TEXT,
+  tool TEXT,
+  input_summary TEXT,
+  input_hash TEXT,
+  rule_id TEXT,
+  rule_reason TEXT,
+  decision TEXT,
+  resolution TEXT,
+  resolver TEXT,
+  resolved_ts TEXT,
+  hold_id TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_hash ON tool_calls(session_id, input_hash);
+CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_decisions_hold ON decisions(hold_id);
 `;
 let _db = null;
 /**
@@ -292,4 +312,36 @@ function insertOutcome(db, sessionId, stopReason, gateResult) {
     withRetry(() => db
         .prepare(`INSERT INTO outcomes (session_id, stop_reason, gate_result) VALUES (?, ?, ?)`)
         .run(sessionId, stopReason, gateResult));
+}
+function insertDecision(db, row) {
+    withRetry(() => db
+        .prepare(`INSERT INTO decisions
+           (session_id, ts, tool, input_summary, input_hash, rule_id, rule_reason, decision, resolution, resolver, resolved_ts, hold_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`)
+        .run(row.session_id, row.ts, row.tool, row.input_summary, row.input_hash, row.rule_id, row.rule_reason, row.decision, row.hold_id ?? null));
+}
+/**
+ * Close the loop on a parked decision: `reins approve`/`reins deny` call this
+ * so the audit trail shows not just that a call was held, but what became of
+ * it. Matched by hold_id, and only the still-unresolved row — a hold_id is
+ * only ever recorded once (retries of the same park don't add rows, see
+ * preTool's `existed` check), so this updates exactly the row it parked.
+ */
+function resolveDecision(db, input) {
+    withRetry(() => db
+        .prepare(`UPDATE decisions SET resolution = ?, resolver = ?, resolved_ts = ?
+         WHERE hold_id = ? AND resolution IS NULL`)
+        .run(input.resolution, input.resolver, input.resolved_ts, input.hold_id));
+}
+/** Chronological gate decisions, optionally scoped to one session. */
+function listDecisions(db, opts = {}) {
+    const limit = opts.limit ?? 500;
+    if (opts.sessionId) {
+        return db
+            .prepare(`SELECT * FROM decisions WHERE session_id = ? ORDER BY ts ASC, id ASC LIMIT ?`)
+            .all(opts.sessionId, limit);
+    }
+    return db
+        .prepare(`SELECT * FROM decisions ORDER BY ts ASC, id ASC LIMIT ?`)
+        .all(limit);
 }

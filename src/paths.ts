@@ -64,6 +64,14 @@ export function guardsPath(payloadCwd?: string): string {
   return path.join(reinsDir(payloadCwd), "guards.json");
 }
 
+/** Policy file v1: guards.json evolved into policy.json (superset schema —
+ *  `expires`, `tool` rules). Canonical target for all writes. `guardsPath`
+ *  above is kept around forever as the pre-0.3 fallback read path — see
+ *  `loadGuards` in guards.ts. */
+export function policyPath(payloadCwd?: string): string {
+  return path.join(reinsDir(payloadCwd), "policy.json");
+}
+
 export function configPath(payloadCwd?: string): string {
   return path.join(reinsDir(payloadCwd), "config.json");
 }

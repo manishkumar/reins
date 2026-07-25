@@ -42,8 +42,40 @@ function cmdLastrun(args) {
     printTrajectory(calls, threshold);
     console.log("");
     printSummary(calls, threshold);
+    printDecisions(db, session.id);
     printAwaiting(session.id);
     return 0;
+}
+/**
+ * A few-line rollup of the gate decisions table (deny/ask/hold/allow), not a
+ * dump — `reins audit` is where the full chronological trail lives. Best-
+ * effort read: an older runs.db without the decisions table (or any read
+ * failure) just means the section is skipped.
+ */
+function printDecisions(db, sessionId) {
+    if (!db)
+        return;
+    let rows;
+    try {
+        rows = (0, db_1.listDecisions)(db, { sessionId });
+    }
+    catch {
+        return;
+    }
+    if (rows.length === 0)
+        return;
+    console.log("");
+    console.log(format_1.c.bold("Gate decisions") + format_1.c.dim(`  (reins audit ${sessionId} for the full trail)`));
+    const counts = new Map();
+    for (const r of rows)
+        counts.set(r.decision, (counts.get(r.decision) ?? 0) + 1);
+    const order = ["deny", "ask", "hold", "allow"];
+    const parts = order.filter((d) => counts.has(d)).map((d) => `${counts.get(d)} ${d}`);
+    console.log(`  ${parts.join(format_1.c.dim(" · "))}`);
+    const unresolved = rows.filter((r) => r.decision === "hold" && !r.resolution).length;
+    if (unresolved > 0) {
+        console.log(format_1.c.dim(`  ${unresolved} hold${unresolved === 1 ? "" : "s"} still awaiting a decision`));
+    }
 }
 /**
  * Actions from this session still parked in the hold queue — read live from

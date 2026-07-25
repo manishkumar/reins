@@ -44,6 +44,28 @@ export function emitAsk(reason: string): void {
   );
 }
 
+/** Park this exact tool call in Claude Code's own transcript ("defer"), instead
+ *  of denying it. The turn ends with stop_reason "tool_deferred" and the call
+ *  survives as an unresolved tool_use; resuming the session replays it through
+ *  this hook again, so an approval can let the ORIGINAL call run rather than
+ *  asking the agent to reconstruct it.
+ *
+ *  Only honored in print mode (`claude -p`) and only when the call is alone in
+ *  its assistant message — Claude Code silently ignores defer otherwise, which
+ *  is why the hold gate never emits this unless it can tell defer will stick.
+ *  See canDefer() in src/defer.ts. */
+export function emitDefer(reason: string): void {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "defer",
+        permissionDecisionReason: reason,
+      },
+    }),
+  );
+}
+
 export function emitPreToolContext(additionalContext: string): void {
   process.stdout.write(
     JSON.stringify({

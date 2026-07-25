@@ -64,7 +64,7 @@ test("guard add --ask: persists action ask; list shows it", () => {
     cwd: dir,
     encoding: "utf8",
   });
-  const saved = JSON.parse(fs.readFileSync(path.join(dir, ".reins", "guards.json"), "utf8"));
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, ".reins", "policy.json"), "utf8"));
   const rule = saved.rules.find((r) => r.pattern === "docker\\s+push");
   assert.strictEqual(rule.action, "ask");
   assert.match(rule.reason, /approval/);
