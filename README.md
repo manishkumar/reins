@@ -194,7 +194,7 @@ The honest caveats, as always:
 - **Refusals land at the boundary.** `reins deny <id> [--steer "..."]` files the refusal, and the agent (or the resumed session) is told the moment it comes back for that exact action — it doesn't sit re-parked, unresolved, forever.
 - **Hold biases closed — uniquely in reins.** If parking itself fails (say `.reins/` is unwritable), the call is denied outright rather than allowed through. The fail-open caveat still applies one level up: a *crashing* hook process fails open, as everywhere.
 
-Ships with a sane default denylist (override freely): `rm -rf`, `git push --force`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env*` / `.git/**`.
+Ships with a sane default denylist (override freely): recursive `rm` at a catastrophic target, recursive `rm` generally (with build artifacts and scratch dirs exempted — see below), `git push --force`, `git push --delete`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env*` / `.git/**`.
 
 **Path globs** match the full path *or any segment-aligned suffix*, so `infra/**` catches the absolute `file_path`s Claude Code sends (e.g. `/Users/you/proj/infra/main.tf`) and works with Windows backslashes too.
 
@@ -203,7 +203,61 @@ Ships with a sane default denylist (override freely): `rm -rf`, `git push --forc
 Guards are **deterministic vetoes on recognized patterns** — excellent speed bumps against accidents and obvious footguns, **not a sandbox.** Two honest limits:
 
 - **They block a *form*, not an *intent*.** Blocked from `rm -rf foo`, an agent may still delete via `find -exec rm`; blocked from a `.env` Write it may try a shell redirect (we block the common redirect forms too, but the cat-and-mouse is unwinnable in general). For containment of a determined/adversarial agent, use OS-level sandboxing and real permission boundaries.
-- **They match raw command text, so false positives happen.** `git commit -m "removed the rm -rf call"` will be blocked by the `rm -rf` guard, because the pattern appears in the message. If a guard is too aggressive for your workflow, `reins guard remove <id>` it or edit `.reins/guards.json` — they're fully yours.
+- **They match raw command text, so false positives happen.** `git commit -m "removed the rm -rf call"` will be blocked by the `rm -rf` guard, because the pattern appears in the message. If a guard is too aggressive for your workflow, `reins guard remove <id>` it or edit `.reins/policy.json` — they're fully yours.
+
+#### We measured how bad this is
+
+Both limits above used to be stated as theory. Then we read the capture DB of a real project — 51 sessions, 2,396 tool calls, six weeks — and got numbers:
+
+| | |
+|---|---|
+| Guard firings | **16** |
+| That prevented something dangerous | **0** |
+| That the agent worked around within seconds | **5 of 5** it retried |
+| Median time to bypass | **11 seconds** |
+
+Every firing was a build artifact (`rm -rf .next`) or a scratch file. And the workaround was never clever — it was dropping a flag:
+
+```
+14:34:21  DENIED   rm -f src/app/harness/page.tsx && rmdir src/app/harness
+14:34:30  ALLOWED  rm    src/app/harness/page.tsx && rmdir src/app/harness
+```
+
+Meanwhile the things that repo could genuinely lose data to — `prisma`, `.env` reads, remote branch deletion — ran unguarded the entire time. A `git push --force-with-lease` was denied; `git push origin --delete <branch>` was not.
+
+Three changes came out of that, and they're the shape of the honest answer rather than a fix for it:
+
+- **Exemptions, matched per argument.** Rules take an `except` list, so `rm -rf` ignores `.next`, `dist`, `node_modules`, `/tmp` and friends. Exemptions are evaluated per command segment and per argument — `rm -rf .next && rm -rf /` is still blocked, and `rm -rf "my build dir"` is not exempted by the word *build* appearing in a phrase.
+- **`rm-catastrophic`**, a separate rule with **no exemptions**, for `/`, `~`, `$HOME`, `..` and system directories. Ordered first, so no exemption list can ever wave those through.
+- **Bypass reporting.** reins now notices when a denied command's intent runs anyway and says so — per event, and in a session summary at the end of the run. It does *not* widen the guard in response: that's an arms race pattern-matching cannot win. It tells you, so you can fix the rule or make it a `hold`.
+
+> A guard that is wrong every time is worse than no guard. It trains the agent to route around it and trains you to uninstall it. If reins reports a bypass, the useful response is usually to narrow the rule — or to stop pretending a `deny` can hold something and make it a `--hold` instead.
+
+### `reins scan` — rules aimed at *your* repo
+
+The default denylist is the same everywhere, which means it's aimed at no one in particular. `reins scan` reads your manifests (`package.json`, `prisma/`, `supabase/`, `alembic.ini`, `*.tf`, `k8s/`, `.env`) and proposes rules for what *this* repo can actually destroy.
+
+```bash
+reins scan            # detect + propose; writes .reins/suggested.json, enforces nothing
+reins scan --accept   # move the proposals into your policy
+```
+
+It is deterministic — no model, no network, no new dependency. Three deliberate constraints:
+
+- **Nothing auto-activates.** Proposals are staged; a human moves them across.
+- **No proposal is ever a `deny`.** A hand-written deny is a considered veto; a generated one is a guess. Guesses get `hold` or `ask`; promote one yourself if you mean it.
+- **Every detection shows its evidence** — the dependency or file that justifies it.
+
+### Keeping rules current: `reins policy upgrade`
+
+A rule fix is worthless if it never reaches installs that already exist. It used to not: a repo initialized in June was still enforcing June's rules in late July, including a pattern that wrongly blocked plain `rm -f one-file.txt` — fixed upstream weeks earlier, delivered to nobody.
+
+```bash
+reins policy upgrade           # show what would change
+reins policy upgrade --apply   # apply it
+```
+
+Shipped rules carry an `origin` so they can be refreshed while your own rules are left alone; `reins doctor` tells you when yours are stale. Your deliberate edits survive — if you downgraded a rule to `ask` or gave it an `expires`, an upgrade keeps that.
 
 ---
 
@@ -374,10 +428,13 @@ reins steer "<msg>" --broadcast  Skip the picker; whichever agent moves next get
 reins steer [--clear]            Show / clear pending steering
 reins name <session> "<label>"   Name a session; --clear reverts to the auto mnemonic
 reins guard list|add|remove|reset    (add takes --ask to escalate, --hold to park)
+reins scan [--accept]            Propose rules for what THIS repo can destroy
+reins policy upgrade [--apply]   Refresh shipped rules, keeping yours and your edits
+reins policy version             Your policy generation vs the shipped one
 reins pending                    List actions parked by hold rules
 reins approve <id>               Approve a parked action (one-shot, exact call)
 reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead
-reins audit [session] [--json]   Every gate decision (deny/ask/hold/allow/breach)
+reins audit [session] [--json]   Every gate decision (deny/ask/hold/allow/breach/bypass)
 reins lastrun [session]          Readable account of a run (id prefix or name)
 reins sessions [-n N]            List recent sessions (with names)
 reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one

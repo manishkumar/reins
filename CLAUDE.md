@@ -70,6 +70,30 @@ will never see. That is the frame for everything below.
 9. **`reins init` merges into `.claude/settings.json`, never clobbers it**, and
    `reins uninstall` removes exactly what init added.
 
+10. **Changing `DEFAULT_RULES` means bumping `POLICY_VERSION`.** Rules are written
+    to `.reins/policy.json` once, at init, and nothing revisits them on its own —
+    so a rule fix that doesn't bump the version reaches zero existing installs.
+    This is not hypothetical: a repo initialized in June 2026 was still enforcing
+    a pattern that blocked plain `rm -f one-file.txt` in late July, weeks after
+    the fix shipped. `reins policy upgrade` is the delivery path, `reins doctor`
+    is the notification, and the version bump is what arms both. Upgrades never
+    clobber: a user's `action`/`expires` on a shipped rule survives, and
+    hand-written rules are never touched.
+
+11. **Generated rules are never `deny`.** Anything `reins scan` proposes is a
+    guess about a stranger's repo, and it lands as `hold` or `ask` in a staging
+    file that does nothing until a human moves it across. A hand-written deny is
+    a considered veto; the two must not be confused. Scan stays deterministic —
+    manifests only, no model, no network — because that's what keeps the
+    zero-dependency claim honest.
+
+12. **Bypass detection reports; it never escalates.** When a denied command's
+    intent runs anyway, reins says so and stops there. Widening the guard to
+    chase the variant is an arms race pattern matching cannot win, and it would
+    turn a reporting feature into a decision the DB could influence (see 1 and
+    4). The ledger is a plain file for the same reason capture can't be trusted
+    here: "your guard didn't hold" must not vanish on Node < 22.5.
+
 ## Judgment calls that keep recurring
 
 - **Steering is added spec, not a hijack.** The vocabulary is "steer"/"nudge" — never

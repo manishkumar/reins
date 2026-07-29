@@ -21,6 +21,14 @@ async function main(): Promise<number> {
       const { cmdGuard } = await import("./commands/guard");
       return cmdGuard(rest);
     }
+    case "scan": {
+      const { cmdScan } = await import("./commands/scan");
+      return cmdScan(rest);
+    }
+    case "policy": {
+      const { cmdPolicy } = await import("./commands/policy");
+      return cmdPolicy(rest);
+    }
     case "pending": {
       const { cmdPending } = await import("./commands/pending");
       return cmdPending();
@@ -155,6 +163,12 @@ USAGE
   reins guard add ... --hold       Park for async approval instead of denying
   reins guard remove <id>          Remove a guard
   reins guard reset                Restore default guards
+  reins scan                       Propose rules for what THIS repo can destroy
+                                   (reads manifests only; writes suggestions, enforces nothing)
+  reins scan --accept              Add the proposed rules to your policy
+  reins policy upgrade             Show what refreshing the shipped rules would change
+  reins policy upgrade --apply     Apply it (your own rules and edits are kept)
+  reins policy version             Show your policy generation vs the shipped one
   reins pending                    List actions parked by hold rules
   reins approve <id>               Approve a parked action (one-shot, exact input)
   reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead

@@ -5,7 +5,68 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Changed — the default denylist was measured, and it was wrong
+
+Six weeks of captured runs in a real project (51 sessions, 2,396 tool calls)
+were replayed against the shipped rules. The guards fired **16 times and
+prevented nothing**: every firing was a build artifact (`rm -rf .next`) or a
+scratch file. In all five cases where the agent still wanted the outcome, it
+reran the command with a flag dropped and it went through — median gap **11
+seconds**. Meanwhile `prisma`, `.env` reads and remote-branch deletion ran
+unguarded the whole time. Replaying all 1,145 Bash calls through the new rules:
+`rm-rf` now fires **zero** times, and the two calls that do fire are real.
+
+- **Rule exemptions (`except`).** Rules take a list of patterns that veto a
+  match. `rm-rf` now ignores build output and scratch dirs (`.next`, `dist`,
+  `build`, `target`, `coverage`, `node_modules`, `__pycache__`, `/tmp`,
+  scratchpads). Exemptions are evaluated **per command segment** and **per
+  argument**, so `rm -rf .next && rm -rf /` is still blocked and
+  `rm -rf "my build dir"` is not exempted by the word *build* in a phrase.
+- **New `rm-catastrophic` rule** for `/`, `~`, `$HOME`, `..` and system
+  directories. Carries no exemptions and is ordered first, so no exemption list
+  can ever wave those through.
+- **New `git-delete-remote-branch` rule.** The captured data had the risk
+  ordering backwards: `git push --force-with-lease` was denied while
+  `git push origin --delete <branch>` — which actually destroyed a ref — was
+  not. Covers `--delete`, `-d`, and the `:branch` refspec.
+- **`write-dotenv` widened to `.env*`** in the shipped defaults (it already was
+  upstream; see the delivery bug below for why installs never got it).
+
 ### Added
+
+- **`reins policy upgrade` — a delivery path for rule fixes.** Rules were
+  written once at init and never revisited, so a fix reached zero existing
+  installs: a repo initialized in June 2026 was still enforcing a pattern that
+  blocked plain `rm -f one-file.txt` in late July, weeks after the fix shipped.
+  The same repo's secrets guard still read `**/.env`, leaving `.env.local` and
+  `.env.production` unguarded the entire time. Shipped rules now carry an
+  `origin` and the policy file a `version`; `reins policy upgrade` shows a diff
+  and `--apply` writes it. Your own rules are never touched, and deliberate
+  edits to a shipped rule (`action`, `expires`) survive. At the current
+  generation a differing rule is treated as **your** customization, not
+  staleness — it is reported, never overwritten. `reins doctor` flags a stale
+  policy.
+- **`reins policy version`** — what this project is actually running. Separates
+  the **binary** (shared by every repo; hooks call bare `reins`) from the
+  **policy generation** (per-project, frozen at init). A project does not pin a
+  reins version; it pins its rules.
+- **Guard-bypass detection.** When a denied command's intent runs anyway in a
+  barely different form, reins says so — at the tool boundary and again in a
+  session summary at Stop ("3 guards fired, 3 bypassed, the fastest after 9s").
+  It reports and stops there: widening the guard to chase the variant is an
+  arms race pattern matching cannot win. Denials are fingerprinted to a
+  flag-stripped token set and matched by **asymmetric containment** — the
+  question is "did the vetoed thing happen anyway", not "are these two commands
+  equally similar" (a symmetric measure missed a real bypass that merely
+  appended `&& echo removed`). The ledger is a plain file under `.reins/`, not
+  the DB: "your guard didn't hold" must not vanish on Node < 22.5.
+- **`reins scan` — rules aimed at your repo.** Reads manifests only
+  (`package.json`, `prisma/`, `supabase/`, `alembic.ini`, `*.tf`, `k8s/`,
+  `.env`) and proposes rules for what *this* project can destroy. Deterministic:
+  no model, no network, no new dependency. Nothing auto-activates — proposals
+  stage to `.reins/suggested.json` until `--accept`. **No proposal is ever a
+  `deny`**: a hand-written deny is a considered veto, a generated one is a
+  guess, so guesses get `hold` or `ask`. Every detection shows its evidence.
 - **The steer picker.** With several agents alive in one repo, a bare
   `reins steer "<msg>"` used to broadcast silently — landing on whichever
   session moved first, which may not be the one you meant. Now, when more than
