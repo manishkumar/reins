@@ -39,6 +39,7 @@ const path = __importStar(require("node:path"));
 const paths_1 = require("../paths");
 const store_1 = require("../store");
 const guards_1 = require("../guards");
+const policyUpgrade_1 = require("../policyUpgrade");
 const config_1 = require("../config");
 const steering_1 = require("../steering");
 const holds_1 = require("../holds");
@@ -103,6 +104,18 @@ function cmdDoctor() {
     line(OK, "source", sourceLabel);
     const guards = (0, guards_1.loadGuards)();
     line(OK, "rule count", `${guards.rules.length}`);
+    // Staleness. Before this check existed, a rule fix could ship upstream and
+    // never reach a single existing install — which is exactly what happened to
+    // the recursive-rm pattern between June and July 2026.
+    const plan = (0, policyUpgrade_1.planUpgrade)(guards);
+    const stale = (0, policyUpgrade_1.stalenessNote)(plan);
+    if (stale) {
+        notes++;
+        line(WARN, "policy version", stale);
+    }
+    else {
+        line(OK, "policy version", `v${plan.toVersion} (current)`);
+    }
     const policyProblems = (0, guards_1.validateRules)(guards.rules);
     const errors = policyProblems.filter((p) => p.severity === "error");
     const warnings = policyProblems.filter((p) => p.severity === "warning");

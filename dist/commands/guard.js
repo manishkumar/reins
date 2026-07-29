@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdGuard = cmdGuard;
 const crypto = __importStar(require("node:crypto"));
 const guards_1 = require("../guards");
+const policyUpgrade_1 = require("../policyUpgrade");
 const format_1 = require("./format");
 function cmdGuard(args) {
     const sub = args[0];
@@ -184,7 +185,9 @@ function remove(args) {
     return 0;
 }
 function reset() {
-    (0, guards_1.saveGuards)({ rules: [...guards_1.DEFAULT_RULES] });
+    // Seed with provenance so a future `reins policy upgrade` can tell these
+    // apart from hand-written rules and refresh them safely.
+    (0, guards_1.saveGuards)({ rules: (0, policyUpgrade_1.seededDefaults)(), version: guards_1.POLICY_VERSION });
     console.log(format_1.c.green("✓ Guards reset to the built-in defaults."));
     return 0;
 }

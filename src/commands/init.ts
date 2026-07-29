@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ensureReinsDir, guardsPath, policyPath, configPath } from "../paths";
-import { loadGuards, saveGuards } from "../guards";
+import { loadGuards, saveGuards, POLICY_VERSION } from "../guards";
+import { seededDefaults } from "../policyUpgrade";
 import { loadConfig, saveConfig } from "../config";
 import { settingsBlockJson } from "../settingsBlock";
 import { mergeReinsHooks } from "../settingsMerge";
@@ -20,7 +21,7 @@ export function cmdInit(args: string[]): number {
   // guards.json (older install) is left alone; init isn't the migration
   // trigger, `reins guard add/remove` is (see saveGuards in guards.ts).
   if (!fs.existsSync(policyPath(here)) && !fs.existsSync(guardsPath(here))) {
-    saveGuards(loadGuards(here), here);
+    saveGuards({ rules: seededDefaults(), version: POLICY_VERSION }, here);
   }
   if (!fs.existsSync(configPath(here))) saveConfig(loadConfig(here), here);
 
