@@ -42,6 +42,34 @@ export async function runStop(): Promise<void> {
   }
 
   if (!sessionId) return; // manual/test invocation — nothing to finalize
+
+  // 2. THE SESSION SUMMARY. Per-event warnings serve whoever is watching the
+  //    run; this serves whoever walked away — which, for the runs reins exists
+  //    for, is the more important reader. Emitted before capture so a DB
+  //    failure can't swallow it.
+  let heldCount = 0;
+  try {
+    const { pendingForSession } = require("../holds") as typeof import("../holds");
+    heldCount = pendingForSession(cwd, sessionId).length;
+  } catch {
+    /* best-effort */
+  }
+  try {
+    const { summarizeSession, formatSummary, clearSession } =
+      require("../bypass") as typeof import("../bypass");
+    const line = formatSummary(summarizeSession(cwd, sessionId), heldCount);
+    if (line) {
+      // stderr always; `systemMessage` is the field Claude Code surfaces to the
+      // user, and an object carrying only that is still a passthrough — no
+      // decision, so the stop is not blocked. If a Claude Code version ignores
+      // the field, the stderr line above is unaffected.
+      process.stderr.write(line + "\n");
+      process.stdout.write(JSON.stringify({ systemMessage: line }));
+    }
+    clearSession(cwd, sessionId);
+  } catch (e) {
+    process.stderr.write("[reins] stop summary failed: " + String(e) + "\n");
+  }
   const transcriptPath = payload.transcript_path as string | undefined;
   const outcome =
     (payload.reason as string) ||

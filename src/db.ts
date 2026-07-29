@@ -394,8 +394,12 @@ export interface DecisionRow {
   rule_id: string;
   rule_reason: string;
   /** "breach" is not a decision reins made — it is the record of a parked
-   *  action that executed anyway, detected after the fact by PostToolUse. */
-  decision: "deny" | "ask" | "hold" | "allow" | "breach";
+   *  action that executed anyway, detected after the fact by PostToolUse.
+   *  "bypass" is its softer cousin: a DENIED call whose intent ran moments
+   *  later in a barely different form. Both are observations about reins
+   *  failing to hold, which is why they live alongside the decisions rather
+   *  than in a log nobody reads. */
+  decision: "deny" | "ask" | "hold" | "allow" | "breach" | "bypass";
   hold_id?: string | null;
 }
 

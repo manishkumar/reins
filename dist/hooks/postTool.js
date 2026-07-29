@@ -59,6 +59,28 @@ async function runPostTool() {
             process.stderr.write("[reins] hold-breach check failed: " + String(e) + "\n");
         }
     }
+    // GUARD BYPASS — a call this session already vetoed just ran in a barely
+    // different form. Checked here rather than at the gate because it is only
+    // knowable from the far side of execution, and because it must never feed
+    // back into a decision: reins reports the bypass, it does not escalate on it.
+    // (Widening the guard to chase the variant would be an arms race the pattern
+    // matcher cannot win — see the README's "speed bumps, not a sandbox".)
+    if (sessionId && toolName === "Bash") {
+        try {
+            const command = toolInput?.command;
+            if (typeof command === "string" && command) {
+                const { findBypass, markBypassed } = require("../bypass");
+                const hit = findBypass(cwd, sessionId, command);
+                if (hit) {
+                    markBypassed(cwd, hit, summary);
+                    reportBypass(cwd, sessionId, toolName, summary, inputHash, hit);
+                }
+            }
+        }
+        catch (e) {
+            process.stderr.write("[reins] bypass check failed: " + String(e) + "\n");
+        }
+    }
     // LOOP ALARM — observe + warn. Surfaced to the agent at this tool boundary.
     const threshold = (0, config_1.loadConfig)(cwd).loopThreshold;
     if (repeatCount >= threshold) {
@@ -102,6 +124,42 @@ function recordBreach(cwd, sessionId, toolName, summary, inputHash, holdId) {
     }
     catch {
         /* the stderr warning above already carried it */
+    }
+}
+/**
+ * Report that a vetoed action happened anyway in a slightly different shape.
+ *
+ * Deliberately NOT surfaced to the agent as additionalContext: telling the
+ * model "we noticed you worked around a guard" invites it to either argue or
+ * get sneakier, and neither helps. This is for the human — stderr so it is
+ * visible without SQLite, plus a decisions row when capture is available.
+ */
+function reportBypass(cwd, sessionId, toolName, summary, inputHash, hit) {
+    const gap = hit.gapMs < 1000 ? `${hit.gapMs}ms` : `${Math.round(hit.gapMs / 1000)}s`;
+    const msg = `[reins] GUARD BYPASSED: rule ${hit.denial.rule_id} denied "${(0, util_1.truncate)(hit.denial.summary, 60)}" ` +
+        `${gap} ago; a ${Math.round(hit.score * 100)}%-identical command ran anyway ` +
+        `("${(0, util_1.truncate)(summary, 60)}"). Either that rule is too broad for this repo ` +
+        `(reins guard remove ${hit.denial.rule_id}) or it should be a hold, not a deny.`;
+    process.stderr.write(msg + "\n");
+    try {
+        const { openDb, insertDecision } = require("../db");
+        const db = openDb(cwd);
+        if (!db)
+            return;
+        insertDecision(db, {
+            session_id: sessionId,
+            ts: (0, util_1.nowIso)(),
+            tool: toolName,
+            input_summary: "BYPASS: " + summary,
+            input_hash: inputHash,
+            rule_id: hit.denial.rule_id,
+            rule_reason: `Denied ${gap} earlier; a ${Math.round(hit.score * 100)}%-identical call executed.`,
+            decision: "bypass",
+            hold_id: null,
+        });
+    }
+    catch {
+        /* the stderr line above already carried it */
     }
 }
 /** Best-effort success detection from the tool response. */

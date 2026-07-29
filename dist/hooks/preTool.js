@@ -118,6 +118,7 @@ async function runPreTool() {
             else {
                 (0, hookio_1.emitDeny)(match.rule.reason);
                 recordDecision(cwd, sessionId, toolName, toolInput, match.rule, "DENIED");
+                noteDenialForBypassCheck(cwd, sessionId, toolName, toolInput, match.rule);
             }
             return; // do NOT consume steering on a gated call; leave it for next time
         }
@@ -195,6 +196,35 @@ function recordDecision(cwd, sessionId, toolName, toolInput, rule, decision, hol
     }
     catch (e) {
         warn("capture (" + decision.toLowerCase() + ") failed: " + String(e));
+    }
+}
+/**
+ * Leave a breadcrumb so PostToolUse can tell whether this veto actually held.
+ *
+ * Written to a plain file rather than the DB deliberately: SQLite is optional
+ * (Node >= 22.5) and "your guard was worked around" must not be a fact that
+ * silently disappears on an older runtime. Failure here is swallowed — a
+ * reporting breadcrumb may never affect a gate decision or break a run.
+ */
+function noteDenialForBypassCheck(cwd, sessionId, toolName, toolInput, rule) {
+    if (!sessionId || toolName !== "Bash")
+        return; // bypass tracking is command-shaped
+    try {
+        const command = toolInput?.command;
+        if (typeof command !== "string" || !command)
+            return;
+        const { recordDenial, fingerprint } = require("../bypass");
+        recordDenial(cwd, {
+            session_id: sessionId,
+            ts: (0, util_1.nowIso)(),
+            rule_id: rule.id,
+            tool: toolName,
+            summary: (0, util_1.summarizeToolInput)(toolName, toolInput),
+            fp: fingerprint(command),
+        });
+    }
+    catch (e) {
+        warn("bypass ledger write failed: " + String(e));
     }
 }
 /** Map the tool_calls-era tag to the decisions table's decision column. */
