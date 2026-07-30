@@ -39,8 +39,8 @@ test("matchesPathGlob: Windows backslash separators are normalized", () => {
 
 test("checkGuards: bash rm -rf is denied, safe command is not", () => {
   const g = { rules: guards.DEFAULT_RULES };
-  assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf build" }));
-  assert.ok(guards.checkGuards(g, "Bash", { command: "sudo rm -fr /tmp/x" }));
+  assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf src" }));
+  assert.ok(guards.checkGuards(g, "Bash", { command: "sudo rm -fr /opt/myapp" }));
   assert.strictEqual(guards.checkGuards(g, "Bash", { command: "ls -la" }), null);
   assert.strictEqual(guards.checkGuards(g, "Bash", { command: "npm run format" }), null);
 });
@@ -77,7 +77,7 @@ test("checkGuards: a hyphen in a FILENAME is not read as a recursive flag", () =
     assert.strictEqual(guards.checkGuards(g, "Bash", { command: cmd }), null, `should allow: ${cmd}`);
   }
   // ...but a genuine recursive rm with a hyphenated path is still blocked.
-  assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf /tmp/reins-pr-body" }), "rm -rf still blocked");
+  assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf ./reins-pr-body" }), "rm -rf still blocked");
   assert.ok(guards.checkGuards(g, "Bash", { command: "rm dir -r" }), "trailing -r still blocked");
 });
 
@@ -141,4 +141,96 @@ test("formatSteeringContext: additive framing, not hijack", () => {
   const ctx = steering.formatSteeringContext("focus on token refresh");
   assert.ok(ctx.includes("focus on token refresh"));
   assert.ok(/refines the goal; it does not replace it/i.test(ctx));
+});
+
+// ---------- exemptions + command segmentation (policy v2) ----------
+//
+// These cases are not hypothetical. Every command in ALLOWED below was denied
+// by reins in a real repo (nyayakosh-ocr-frontend, 51 sessions / 2,396 tool
+// calls, Jun-Jul 2026) and in all 16 firings the guard was wrong — the agent
+// simply re-ran the same deletion without the flag, median 11 seconds later.
+
+test("checkGuards: build artifacts and scratch dirs are exempt from rm-rf", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  const ALLOWED = [
+    "rm -rf .next && npm run build",
+    "rm -r .next && npm run build 2>&1 | tail -12",
+    "rm -rf /Users/m/proj/.next && sleep 3",
+    "cd /Users/m/proj; rm -rf .next/types/app/matters 2>&1 || rm -rf ./.next/types/app/matters",
+    "rm -rf node_modules && npm install",
+    "rm -rf dist build coverage",
+    "rm -rf /private/tmp/claude-501/-Users-m/abc/scratchpad/tessdata",
+    "rm -rf target",
+    "rm -rf __pycache__",
+  ];
+  for (const cmd of ALLOWED) {
+    assert.strictEqual(guards.checkGuards(g, "Bash", { command: cmd }), null, `should allow: ${cmd}`);
+  }
+});
+
+test("checkGuards: catastrophic rm targets are blocked and NEVER exempt", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  for (const cmd of ["rm -rf /", "rm -rf /*", "rm -rf ~", "rm -rf ~/", "rm -rf $HOME", "rm -rf /etc", "rm -rf /Users", "rm -rf .."]) {
+    const m = guards.checkGuards(g, "Bash", { command: cmd });
+    assert.ok(m, `should block: ${cmd}`);
+    assert.strictEqual(m.rule.id, "rm-catastrophic", `wrong rule for: ${cmd}`);
+  }
+});
+
+test("checkGuards: an exempt segment does not launder its neighbours", () => {
+  // The reason exemptions are judged per segment rather than per command.
+  const g = { rules: guards.DEFAULT_RULES };
+  assert.strictEqual(
+    guards.checkGuards(g, "Bash", { command: "rm -rf .next && rm -rf /" }).rule.id,
+    "rm-catastrophic",
+  );
+  assert.strictEqual(
+    guards.checkGuards(g, "Bash", { command: "rm -rf /tmp/x && rm -rf ~" }).rule.id,
+    "rm-catastrophic",
+  );
+  assert.strictEqual(guards.checkGuards(g, "Bash", { command: "rm -rf dist; rm -rf src" }).rule.id, "rm-rf");
+});
+
+test("splitCommandSegments: splits on operators but not inside quotes", () => {
+  assert.deepStrictEqual(guards.splitCommandSegments("a && b || c ; d | e & f"), ["a ", " b ", " c ", " d ", " e ", " f"]);
+  assert.deepStrictEqual(guards.splitCommandSegments('git commit -m "build; then deploy"'), [
+    'git commit -m "build; then deploy"',
+  ]);
+  assert.deepStrictEqual(guards.splitCommandSegments("echo 'a; b'"), ["echo 'a; b'"]);
+  assert.deepStrictEqual(guards.splitCommandSegments("solo"), ["solo"]);
+});
+
+test("checkGuards: remote branch deletion is blocked (both spellings)", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  for (const cmd of ["git push origin --delete feat/foo", "git push origin :feat/foo", "git push -d origin topic"]) {
+    assert.ok(guards.checkGuards(g, "Bash", { command: cmd }), `should block: ${cmd}`);
+  }
+  assert.strictEqual(guards.checkGuards(g, "Bash", { command: "git push -u origin feat/foo" }), null);
+});
+
+test("validateRules: a malformed except is an error, a trivial one a warning", () => {
+  const bad = guards.validateRules([
+    { id: "r1", type: "bash", pattern: "x", reason: "r", except: ["([unclosed"] },
+  ]);
+  assert.ok(bad.some((p) => p.severity === "error" && /invalid except/.test(p.message)));
+  const trivial = guards.validateRules([{ id: "r2", type: "bash", pattern: "x", reason: "r", except: [".*"] }]);
+  assert.ok(trivial.some((p) => p.severity === "warning" && /never fire/.test(p.message)));
+  const notArray = guards.validateRules([{ id: "r3", type: "bash", pattern: "x", reason: "r", except: "nope" }]);
+  assert.ok(notArray.some((p) => p.severity === "error" && /must be an array/.test(p.message)));
+});
+
+test("tokenizeArgs: quotes make a phrase one argument, and vanish", () => {
+  assert.deepStrictEqual(guards.tokenizeArgs('rm -rf "my build dir" src'), ["rm", "-rf", "my build dir", "src"]);
+  assert.deepStrictEqual(guards.tokenizeArgs("rm -rf '/a b/c'"), ["rm", "-rf", "/a b/c"]);
+  assert.deepStrictEqual(guards.tokenizeArgs("rm  -rf   x"), ["rm", "-rf", "x"]);
+});
+
+test("checkGuards: an exemption must BE the argument, not appear inside it", () => {
+  // The distinction quoting exists to make: `build` as a path component is a
+  // build directory; `build` as a word inside a filename is not.
+  const g = { rules: guards.DEFAULT_RULES };
+  assert.ok(guards.checkGuards(g, "Bash", { command: 'rm -rf "my build dir"' }), "phrase must NOT exempt");
+  assert.ok(guards.checkGuards(g, "Bash", { command: "rm -rf build-tools" }), "prefix must NOT exempt");
+  assert.strictEqual(guards.checkGuards(g, "Bash", { command: "rm -rf /Users/x/p/build" }), null);
+  assert.strictEqual(guards.checkGuards(g, "Bash", { command: 'rm -rf "/Users/x/my proj/dist"' }), null);
 });

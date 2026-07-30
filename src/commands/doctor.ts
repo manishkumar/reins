@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { reinsDir, steeringPath } from "../paths";
 import { getDriver, capabilityNote } from "../store";
 import { loadGuards, validateRules, policySource } from "../guards";
+import { planUpgrade, stalenessNote } from "../policyUpgrade";
 import { loadConfig } from "../config";
 import { peekSteering } from "../steering";
 import { listPending } from "../holds";
@@ -74,6 +75,17 @@ export function cmdDoctor(): number {
   line(OK, "source", sourceLabel);
   const guards = loadGuards();
   line(OK, "rule count", `${guards.rules.length}`);
+  // Staleness. Before this check existed, a rule fix could ship upstream and
+  // never reach a single existing install — which is exactly what happened to
+  // the recursive-rm pattern between June and July 2026.
+  const plan = planUpgrade(guards);
+  const stale = stalenessNote(plan);
+  if (stale) {
+    notes++;
+    line(WARN, "policy version", stale);
+  } else {
+    line(OK, "policy version", `v${plan.toVersion} (current)`);
+  }
   const policyProblems = validateRules(guards.rules);
   const errors = policyProblems.filter((p) => p.severity === "error");
   const warnings = policyProblems.filter((p) => p.severity === "warning");

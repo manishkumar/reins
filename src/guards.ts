@@ -29,6 +29,26 @@ export interface GuardRule {
   reason: string;
   /** Absent means "deny" — every pre-0.2 guards.json stays valid unchanged. */
   action?: GuardAction;
+  /** Patterns that VETO a match of this rule — the exemption list. Same
+   *  dialect as `pattern` (regex for "bash", glob for "path"/"tool").
+   *
+   *  Why this exists: six weeks of captured runs showed the recursive-rm guard
+   *  firing 16 times and being *right* zero times — every hit was a build
+   *  artifact (`rm -rf .next`) or a scratch file. A guard that is wrong every
+   *  time is worse than absent: it trains the agent to route around it (which
+   *  it did, 5/5, median 11 seconds) and trains the human to uninstall.
+   *
+   *  For "bash" the veto is evaluated PER COMMAND SEGMENT, not per command —
+   *  see `splitCommandSegments`. Whole-command exemption would be a bypass:
+   *  `rm -rf .next && rm -rf /` must still be blocked on its second segment.
+   *  Omit for a rule that must never be exempt (see `rm-catastrophic`). */
+  except?: string[];
+  /** Where this rule came from. `default@<n>` marks a rule seeded from
+   *  DEFAULT_RULES at policy version <n>, which is what makes `reins policy
+   *  upgrade` possible: shipped rules can be refreshed while hand-written ones
+   *  are left alone. Absent means hand-written (or a pre-0.4 file — those are
+   *  matched by id instead, so existing installs are still upgradeable). */
+  origin?: string;
   /** Optional ISO-8601 date (e.g. "2026-08-01") after which this rule stops
    *  matching — a temporary hold on a risky area shouldn't outlive its reason.
    *  Treated as valid through the END of that day (UTC); see `isExpired`.
@@ -42,7 +62,19 @@ export interface GuardRule {
 
 export interface GuardsFile {
   rules: GuardRule[];
+  /** The DEFAULT_RULES generation this file was seeded from. Absent means a
+   *  pre-0.4 file, which `reins policy upgrade` handles by matching rule ids. */
+  version?: number;
 }
+
+/** Bump whenever DEFAULT_RULES changes in a way existing installs should get.
+ *
+ *  Before this existed there was no delivery path for a rule fix: a repo
+ *  initialized in June was still running June's rules in late July, including
+ *  a `rm -fr?` pattern that blocked plain `rm -f one-file.txt`. The fix had
+ *  shipped weeks earlier and reached nobody. Shipping a rule change without
+ *  bumping this is the same bug again. */
+export const POLICY_VERSION = 2;
 
 /** Policy file v1 renamed guards.json -> policy.json; the on-disk shape is
  *  unchanged (just a bigger rule vocabulary). Alias so call sites can adopt
@@ -54,6 +86,25 @@ export type PolicyFile = GuardsFile;
 // Fully overridable: `reins guard remove <id>` or edit .reins/guards.json.
 export const DEFAULT_RULES: GuardRule[] = [
   {
+    // Recursive rm aimed at a target you cannot rebuild: the filesystem root,
+    // your home directory, a top-level system directory, or the parent of the
+    // project. Deliberately listed BEFORE rm-rf and deliberately has no
+    // `except` — first match wins, so `rm -rf .next && rm -rf /` is caught here
+    // no matter how generous the exemption list below gets.
+    id: "rm-catastrophic",
+    type: "bash",
+    pattern:
+      "\\brm\\b[^\\n]*?\\s(?:-[a-z]*r[a-z]*|--recursive)\\b[^\\n]*?\\s[\"']?(?:" +
+      "/(?:\\*|\\s|$)" + // `rm -rf /`, `rm -rf /*`
+      "|~(?:/(?:\\*|\\s|$)|\\s|$)" + // `rm -rf ~`, `~/`, `~/*`
+      "|\\$\\{?HOME\\}?" + // `rm -rf $HOME`
+      "|\\.\\.(?:/(?:\\*|\\s|$)|\\s|$)" + // `rm -rf ..`
+      "|/(?:etc|usr|var|bin|sbin|lib|opt|boot|dev|proc|sys|System|Library|Applications|Users|home)/?(?:\\s|$)" +
+      ")",
+    reason:
+      "Recursive rm targeting the filesystem root, home, or a system directory is blocked by a reins guard.",
+  },
+  {
     // Blocks RECURSIVE rm in any flag form — the dangerous part. Catches short
     // combos (-rf, -fr, -Rf, -r) and the long form (--recursive), while leaving
     // a single-file `rm -f x` / `rm --force x` alone. The leading \s anchors the
@@ -61,9 +112,28 @@ export const DEFAULT_RULES: GuardRule[] = [
     // FILENAME — e.g. `rm -f /tmp/reins-pr-body.md`, where `-pr` reads like a
     // recursive short flag — is not mistaken for one. Two separate branches keep
     // `--force` (which contains an 'r') from matching the short-flag form.
+    //
+    // The `except` list is the whole reason this rule is still worth having.
+    // Measured over 2,396 captured tool calls, every single firing of this rule
+    // was a build artifact or a scratch file — and the agent re-ran the same
+    // deletion without the flag seconds later. Exempting the regenerable
+    // directories costs nothing real (they are, by definition, rebuildable) and
+    // buys back the credibility the rule needs on the day it is right.
     id: "rm-rf",
     type: "bash",
     pattern: "\\brm\\b[^;&|]*?\\s(?:-[a-z]*r[a-z]*\\b|--recursive\\b)",
+    // Each entry is matched against a whole ARGUMENT, anchored, so the exempted
+    // name has to BE a path component rather than merely appear in the text.
+    // `rm -rf "my build dir"` stays blocked; `rm -rf /Users/x/p/build` does not.
+    except: [
+      // Build output and tool caches — regenerable by definition.
+      "^(?:.*/)?(?:\\.next|\\.nuxt|\\.svelte-kit|\\.turbo|\\.cache|\\.parcel-cache|\\.pytest_cache|\\.mypy_cache|\\.gradle|__pycache__|node_modules|bower_components)(?:/.*)?$",
+      "^(?:.*/)?(?:dist|build|out|target|coverage|\\.output|\\.vercel|\\.netlify)(?:/.*)?$",
+      // Scratch space: /tmp, macOS /private/tmp + /var/folders, and the
+      // per-session scratchpad Claude Code hands the agent.
+      "^/(?:private/)?(?:tmp|var/folders)/",
+      "^(?:.*/)?scratchpad(?:/.*)?$",
+    ],
     reason: "Recursive rm (rm -rf / --recursive) is blocked by a reins guard.",
   },
   {
@@ -71,6 +141,18 @@ export const DEFAULT_RULES: GuardRule[] = [
     type: "bash",
     pattern: "git\\s+push\\b.*(--force\\b|--force-with-lease\\b|-f\\b)",
     reason: "Force-pushing is blocked by a reins guard (history rewrite).",
+  },
+  {
+    // Deleting a remote branch. Added because the captured data showed the risk
+    // ordering was backwards: `git push --force-with-lease` (the *safe* form of
+    // a force push, on a feature branch) was denied, while
+    // `git push origin --delete <branch>` — which destroys a ref other people
+    // may be relying on — passed straight through. Covers both spellings:
+    // `--delete`/`-d` and the older colon refspec (`git push origin :branch`).
+    id: "git-delete-remote-branch",
+    type: "bash",
+    pattern: "git\\s+push\\b[^\\n]*?(?:\\s(?:--delete|-d)\\b|\\s:[\\w./-]+)",
+    reason: "Deleting a remote branch is blocked by a reins guard.",
   },
   {
     id: "git-hard-reset",
@@ -140,7 +222,7 @@ export function loadGuards(payloadCwd?: string): GuardsFile {
   return (
     readRulesFile(policyPath(payloadCwd)) ??
     readRulesFile(guardsPath(payloadCwd)) ??
-    { rules: [...DEFAULT_RULES] }
+    { rules: [...DEFAULT_RULES], version: POLICY_VERSION }
   );
 }
 
@@ -150,7 +232,11 @@ export function saveGuards(guards: GuardsFile, payloadCwd?: string): void {
   // one-time migration: policy.json now exists alongside it, and guards.json
   // is left in place untouched — it's the user's file, never delete it out
   // from under them.
-  fs.writeFileSync(policyPath(payloadCwd), JSON.stringify(guards, null, 2) + "\n");
+  // Stamp the generation on every write so a file created today can be told
+  // apart from one created before a rule fix shipped. A file with no version
+  // is treated as pre-0.4 and upgraded by matching rule ids instead.
+  const out: GuardsFile = { ...guards, version: guards.version ?? POLICY_VERSION };
+  fs.writeFileSync(policyPath(payloadCwd), JSON.stringify(out, null, 2) + "\n");
 }
 
 // Translate a minimal glob into a fully-anchored RegExp.
@@ -256,6 +342,129 @@ export function stripQuoted(cmd: string): string {
     .replace(/'[^']*'/g, " ");
 }
 
+/**
+ * Split a shell command into independently-executed segments on `;`, `&&`,
+ * `||`, `|` and newlines.
+ *
+ * This exists so exemptions can be judged per segment. Testing an `except`
+ * against the whole command string would be a bypass with a friendly face:
+ * `rm -rf .next && rm -rf /` contains `.next`, so a whole-command exemption
+ * would wave through the part that ends your afternoon. Judging each segment
+ * on its own means segment 1 is exempt and segment 2 still gets vetoed.
+ *
+ * Splitting happens OUTSIDE quotes so a separator inside an argument
+ * (`git commit -m "build; then deploy"`) doesn't manufacture a segment. This
+ * is a lexical split, not a shell parser — command substitution, heredocs and
+ * `bash -c "…"` bodies are not descended into. That limit is the same one the
+ * README already states for guards generally: they match form, not intent.
+ */
+export function splitCommandSegments(cmd: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (quote) {
+      current += ch;
+      if (ch === "\\" && quote === '"' && i + 1 < cmd.length) {
+        current += cmd[++i]; // escaped char inside double quotes stays paired
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "\n" || ch === ";") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    if ((ch === "&" || ch === "|") && cmd[i + 1] === ch) {
+      segments.push(current);
+      current = "";
+      i++; // consume the doubled operator
+      continue;
+    }
+    if (ch === "|" || ch === "&") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments.filter((s) => s.trim().length > 0);
+}
+
+/**
+ * Split one command segment into argument tokens, honouring quotes and dropping
+ * the quote characters themselves. `rm -rf "my build dir" src` yields
+ * ["rm", "-rf", "my build dir", "src"].
+ *
+ * Exemptions are matched against these tokens rather than against the raw text,
+ * and the difference is load-bearing in both directions. Matching raw text lets
+ * a phrase inside a quoted argument ("my build dir") satisfy a `build`
+ * exemption, waving through a deletion nobody exempted. Matching the
+ * quote-stripped text instead (what `stripQuoted` produces) erases quoted PATHS
+ * entirely, so `rm -rf "$TMP/build"` could never be exempted while its unquoted
+ * twin could. Tokens are the level at which "is this argument a build
+ * directory?" is actually a well-formed question.
+ */
+export function tokenizeArgs(segment: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote) {
+      if (ch === "\\" && quote === '"' && i + 1 < segment.length) {
+        current += segment[++i];
+      } else if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (started) tokens.push(current);
+      current = "";
+      started = false;
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/** Compile a rule's `except` list, skipping entries that don't compile.
+ *  A malformed exemption must not silently disable the rule it belongs to —
+ *  it's dropped (so the rule keeps guarding) and `reins doctor` reports it. */
+function compileExcept(rule: GuardRule, compile: (p: string) => RegExp): RegExp[] {
+  if (!rule.except || rule.except.length === 0) return [];
+  const out: RegExp[] = [];
+  for (const p of rule.except) {
+    try {
+      out.push(compile(p));
+    } catch {
+      // skip — validateRules reports it loudly
+    }
+  }
+  return out;
+}
+
 /** Returns the first matching guard rule for a tool call, or null. */
 export function checkGuards(
   guards: GuardsFile,
@@ -275,7 +484,25 @@ export function checkGuards(
       } catch {
         continue; // skip malformed user regex rather than crash the guard
       }
-      if (re.test(stripQuoted(command))) return { rule };
+      const exempt = compileExcept(rule, (p) => new RegExp(p, "i"));
+      // Evaluate segment by segment so an exemption can clear ONE command
+      // without clearing its neighbours. With no `except` the behaviour is
+      // identical to matching the whole command: a pattern that matched the
+      // full string matches the segment it lives in.
+      for (const segment of splitCommandSegments(command)) {
+        const stripped = stripQuoted(segment);
+        if (!re.test(stripped)) continue;
+        // Exemptions are matched per ARGUMENT (see tokenizeArgs), so an
+        // exemption clears a rule only when some argument really is the
+        // exempted thing — not merely when the word appears somewhere in the
+        // command text. Bounded further by rm-catastrophic carrying no
+        // exemptions at all: nothing can wave through `rm -rf /`.
+        if (exempt.length > 0) {
+          const args = tokenizeArgs(segment);
+          if (args.some((arg) => exempt.some((ex) => ex.test(arg)))) continue;
+        }
+        return { rule };
+      }
     } else if (rule.type === "path") {
       const paths = pathsFromInput(input);
       if (paths.length === 0) continue;
@@ -285,10 +512,13 @@ export function checkGuards(
       } catch {
         continue;
       }
+      const exempt = compileExcept(rule, globToRegExp);
       for (const p of paths) {
         // Match against the path and every segment-aligned suffix, so a rule
         // like `infra/**` catches absolute paths and works on Windows too.
-        if (matchesPathGlob(re, p)) return { rule };
+        if (!matchesPathGlob(re, p)) continue;
+        if (exempt.some((ex) => matchesPathGlob(ex, p))) continue;
+        return { rule };
       }
     } else if (rule.type === "tool") {
       // NAME glob against the tool itself (e.g. `mcp__stripe__*`, `WebFetch`) —
@@ -302,7 +532,10 @@ export function checkGuards(
       } catch {
         continue;
       }
-      if (re.test(toolName)) return { rule };
+      if (!re.test(toolName)) continue;
+      const exempt = compileExcept(rule, globToRegExp);
+      if (exempt.some((ex) => ex.test(toolName))) continue;
+      return { rule };
     }
   }
   return null;
@@ -398,6 +631,42 @@ export function validateRules(rules: GuardRule[]): PolicyProblem[] {
           severity: "warning",
           message: `expired ${rule.expires} — inactive, skipped at match time`,
         });
+      }
+    }
+
+    if (rule.except !== undefined) {
+      if (!Array.isArray(rule.except)) {
+        problems.push({
+          ruleId,
+          severity: "error",
+          message: "except must be an array of patterns",
+        });
+      } else {
+        const compile = rule.type === "bash" ? (p: string) => new RegExp(p) : globToRegExp;
+        for (const p of rule.except) {
+          if (typeof p !== "string") {
+            problems.push({ ruleId, severity: "error", message: "except entries must be strings" });
+            continue;
+          }
+          try {
+            compile(p);
+          } catch (e) {
+            // A dead exemption is a rule that fires MORE than intended, not
+            // less — the safe direction, but still not what was written.
+            problems.push({
+              ruleId,
+              severity: "error",
+              message: `invalid except pattern "${p}": ${(e as Error).message} — ignored, so the rule may over-fire`,
+            });
+          }
+          if (TRIVIAL_PATTERNS.has(p.trim())) {
+            problems.push({
+              ruleId,
+              severity: "warning",
+              message: `except "${p}" matches everything — this rule can never fire`,
+            });
+          }
+        }
       }
     }
 

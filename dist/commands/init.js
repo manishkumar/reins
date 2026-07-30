@@ -38,6 +38,7 @@ const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
 const paths_1 = require("../paths");
 const guards_1 = require("../guards");
+const policyUpgrade_1 = require("../policyUpgrade");
 const config_1 = require("../config");
 const settingsBlock_1 = require("../settingsBlock");
 const settingsMerge_1 = require("../settingsMerge");
@@ -54,7 +55,7 @@ function cmdInit(args) {
     // guards.json (older install) is left alone; init isn't the migration
     // trigger, `reins guard add/remove` is (see saveGuards in guards.ts).
     if (!fs.existsSync((0, paths_1.policyPath)(here)) && !fs.existsSync((0, paths_1.guardsPath)(here))) {
-        (0, guards_1.saveGuards)((0, guards_1.loadGuards)(here), here);
+        (0, guards_1.saveGuards)({ rules: (0, policyUpgrade_1.seededDefaults)(), version: guards_1.POLICY_VERSION }, here);
     }
     if (!fs.existsSync((0, paths_1.configPath)(here)))
         (0, config_1.saveConfig)((0, config_1.loadConfig)(here), here);

@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
-import { loadGuards, saveGuards, globToRegExp, isExpired, DEFAULT_RULES, GuardRule, GuardType } from "../guards";
+import { loadGuards, saveGuards, globToRegExp, isExpired, DEFAULT_RULES, POLICY_VERSION, GuardRule, GuardType } from "../guards";
+import { seededDefaults } from "../policyUpgrade";
 import { c } from "./format";
 
 export function cmdGuard(args: string[]): number {
@@ -155,7 +156,9 @@ function remove(args: string[]): number {
 }
 
 function reset(): number {
-  saveGuards({ rules: [...DEFAULT_RULES] });
+  // Seed with provenance so a future `reins policy upgrade` can tell these
+  // apart from hand-written rules and refresh them safely.
+  saveGuards({ rules: seededDefaults(), version: POLICY_VERSION });
   console.log(c.green("✓ Guards reset to the built-in defaults."));
   return 0;
 }
