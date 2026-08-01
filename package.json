@@ -1,6 +1,6 @@
 {
   "name": "@manishky/reins",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A local-first kit of Claude Code hooks: steer a running agent mid-flight, hard-block forbidden actions, get warned when it loops, and capture every run's trajectory to a queryable SQLite file. No daemon, no backend, no account.",
   "keywords": [
     "claude",
