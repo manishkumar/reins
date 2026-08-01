@@ -3,7 +3,7 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.3.2]
 
 ### Fixed
 
