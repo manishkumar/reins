@@ -238,11 +238,16 @@ function formatHoldReason(id, ruleReason) {
 /**
  * The same park, addressed to the HUMAN instead of the agent.
  *
- * `formatHoldReason` above is written for the model — it redirects it to other
- * work. Nothing in it reaches the person who has to type `reins approve` except
- * by way of the agent choosing to repeat it. This is the line Claude Code puts
- * in front of them directly (`systemMessage`), so a watched session shows its
- * queue instead of burying it in tool output.
+ * Not a visibility fix — `permissionDecisionReason` already reaches the user,
+ * rendered as the tool's error. A legibility one. That text is sixty words
+ * written to redirect a model, with the id and the approve command buried
+ * mid-sentence; scanning it is work, and the person watching a run is doing
+ * something else. This is the same fact as one scannable line, in the one field
+ * (`systemMessage`) Claude Code shows the user and not the model.
+ *
+ * The tool name is deliberately absent: Claude Code prefixes the line with its
+ * own attribution (`PreToolUse:Bash says:`), so repeating it here just pushes
+ * the command — the part you actually read — further right.
  *
  * Deliberately short: it is a notification, not a report. `reins pending` is
  * still where the full proposal lives, and the Stop summary still catches the
@@ -252,12 +257,12 @@ function formatHoldNotice(id, tool, input) {
     const { summarizeToolInput, truncate } = require("./util");
     let what = tool;
     try {
-        what = `${tool}  ${truncate(summarizeToolInput(tool, input), 60)}`;
+        what = truncate(summarizeToolInput(tool, input), 60);
     }
     catch {
         /* a summary is a nicety; the id and the command to run are the point */
     }
-    return `[reins] ⏸ HELD  ${what}\n        approve: reins approve ${id}   ·   see all: reins pending`;
+    return `[reins] ⏸ HELD  ${what}\n  approve: reins approve ${id}   ·   see all: reins pending`;
 }
 /**
  * The reason attached to a deferred hold. Unlike the deny reason above, this is

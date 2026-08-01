@@ -7,12 +7,12 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Added
 
-- **A parked action now tells the human directly.** `hold` was built for the run
-  nobody is watching, and it showed: `permissionDecisionReason` is addressed to
-  the *model*, so the person who has to type `reins approve` only learned about
-  the queue if the agent chose to mention it, somewhere in a wall of tool
-  output. Claude Code has exactly one field that reaches the user instead of the
-  model — `systemMessage` — and the hold gate now uses it:
+- **A parked action now says so in one scannable line.** `hold` was built for
+  the run nobody is watching, and it showed. The deny reason was always visible
+  — Claude Code renders it as the tool's error — but it is sixty words written
+  to redirect a *model*, with the id and the approve command buried mid-sentence.
+  Claude Code has exactly one field that reaches the user instead of the model —
+  `systemMessage` — and the hold gate now uses it:
 
   ```
   [reins] ⏸ HELD  Bash  git push origin main
