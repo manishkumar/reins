@@ -38,7 +38,7 @@ export async function runPreTool(): Promise<void> {
   //    we fail open (allow), but the matching itself is deterministic.
   try {
     const guards = loadGuards(cwd);
-    const match = checkGuards(guards, toolName, toolInput);
+    const match = checkGuards(guards, toolName, toolInput, cwd);
     if (match) {
       if (match.rule.action === "hold") {
         // Manual/test invocation (no session): deny, but don't park — the same

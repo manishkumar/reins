@@ -3,6 +3,32 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`rm -rf` no longer false-vetoes a relative deletion inside exempted space.**
+  Found by dogfooding a fresh 0.3.1 install: an agent working in its scratchpad
+  runs `rm -rf home proj`, but every scratch exemption is written as an absolute
+  prefix (`^/(?:private/)?tmp/`), and the matcher had no `cwd` to resolve
+  against — so the exemption list was unreachable from the exact place it was
+  written for, on every macOS session. Relative arguments are now judged from
+  the session's `cwd`.
+
+  The widening is narrow on purpose, since an exemption only ever lets *more*
+  run: it applies only when the cwd is itself exempted **and every argument in
+  the segment resolves inside it**. An absolute path, a `~`, an unexpanded
+  `$VAR`, a `..` that climbs out, or a `cd` anywhere in the command all drop it
+  and the guard fires as before. The rejected design was per-argument
+  resolution — it clears the rule via the command word itself (`rm` →
+  `<cwd>/rm`, which matches the scratch exemption), which from a scratch cwd
+  would have exempted `rm -rf /Users/you/project`. There's a regression test
+  pinning that.
+
+  This ships in the **binary**, not the policy: `DEFAULT_RULES` is unchanged, so
+  `POLICY_VERSION` stays at 2 and no `reins policy upgrade` is needed — updating
+  the package is enough.
+
 ## [0.3.1]
 
 ### Changed — the default denylist was measured, and it was wrong

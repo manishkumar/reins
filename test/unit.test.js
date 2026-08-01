@@ -234,3 +234,66 @@ test("checkGuards: an exemption must BE the argument, not appear inside it", () 
   assert.strictEqual(guards.checkGuards(g, "Bash", { command: "rm -rf /Users/x/p/build" }), null);
   assert.strictEqual(guards.checkGuards(g, "Bash", { command: 'rm -rf "/Users/x/my proj/dist"' }), null);
 });
+
+test("checkGuards: a relative argument is judged from the session's cwd", () => {
+  // Found by dogfooding: an agent that has cd'd into its scratchpad writes
+  // `rm -rf home proj`, not the absolute path. Every scratch exemption is
+  // anchored `^/`, so without cwd the exemption list is unreachable from the
+  // one place it was written for.
+  const g = { rules: guards.DEFAULT_RULES };
+  const scratch = "/private/tmp/claude-501/session/scratchpad";
+  const cmd = { command: "rm -rf home proj" };
+
+  assert.ok(guards.checkGuards(g, "Bash", cmd), "no cwd → blocked (fail toward firing)");
+  assert.strictEqual(guards.checkGuards(g, "Bash", cmd, scratch), null, "scratch cwd → exempt");
+  assert.strictEqual(guards.checkGuards(g, "Bash", cmd, "/tmp/x"), null, "/tmp cwd → exempt");
+  assert.ok(guards.checkGuards(g, "Bash", cmd, "/Users/x/realproject"), "real repo cwd → still blocked");
+});
+
+test("checkGuards: cwd resolution never widens past what it was for", () => {
+  const g = { rules: guards.DEFAULT_RULES };
+  const scratch = "/private/tmp/session/scratchpad";
+
+  // A `cd` makes the hook's cwd stale, so resolution is dropped entirely —
+  // otherwise `cd / && rm -rf home` would be exempted into deleting /home.
+  assert.ok(
+    guards.checkGuards(g, "Bash", { command: "cd / && rm -rf home" }, scratch),
+    "cd in the command drops relative resolution",
+  );
+  // An unexpanded variable resolves to a literal, not to where it points.
+  assert.ok(
+    guards.checkGuards(g, "Bash", { command: "rm -rf $PROJECT_ROOT" }, scratch),
+    "unexpanded $VAR must not be resolved into the exemption",
+  );
+  // Absolute and ~ arguments are judged as written, cwd or not.
+  assert.ok(
+    guards.checkGuards(g, "Bash", { command: "rm -rf /Users/x/realproject/src" }, scratch),
+    "absolute path is not reinterpreted relative to cwd",
+  );
+  // rm-catastrophic carries no exemptions, so no cwd can ever clear it.
+  assert.strictEqual(
+    guards.checkGuards(g, "Bash", { command: "rm -rf /" }, scratch).rule.id,
+    "rm-catastrophic",
+  );
+  assert.strictEqual(
+    guards.checkGuards(g, "Bash", { command: "rm -rf ~" }, scratch).rule.id,
+    "rm-catastrophic",
+  );
+  // Escaping the scratch dir with .. must not stay exempt.
+  assert.ok(
+    guards.checkGuards(g, "Bash", { command: "rm -rf ../../../../Users/x/proj" }, scratch),
+    "..-escape out of scratch is still blocked",
+  );
+  // Regression: judging exemptions per-resolved-token would clear the rule via
+  // the command word itself (`rm` -> `<scratch>/rm`, which matches the scratch
+  // exemption), exempting a deletion aimed anywhere. The exemption asks whether
+  // EVERY argument stays inside cwd, so these stay blocked.
+  assert.ok(
+    guards.checkGuards(g, "Bash", { command: "sudo rm -rf /Users/x/proj" }, scratch),
+    "command word must not resolve into an exemption",
+  );
+  assert.ok(
+    guards.checkGuards(g, "Bash", { command: "rm -rf home /Users/x/proj" }, scratch),
+    "one confined arg must not exempt an unconfined sibling",
+  );
+});

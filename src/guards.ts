@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { guardsPath, policyPath, ensureReinsDir } from "./paths";
 
 export type GuardType = "bash" | "path" | "tool";
@@ -465,11 +466,52 @@ function compileExcept(rule: GuardRule, compile: (p: string) => RegExp): RegExp[
   return out;
 }
 
-/** Returns the first matching guard rule for a tool call, or null. */
+/**
+ * Is every argument in this segment confined to `cwd` — i.e. is the segment's
+ * whole blast radius inside the working directory?
+ *
+ * This is the question that makes cwd usable for exemptions at all. The obvious
+ * approach — resolve each argument against cwd and exempt if ANY resolved form
+ * matches — is wrong in a way that is easy to miss and expensive to ship: the
+ * command word itself is an argument token, so `rm` resolves to `<cwd>/rm`,
+ * which matches a `^/private/tmp/` exemption and clears the rule no matter what
+ * the real target was. From a scratch cwd that would have exempted
+ * `rm -rf /Users/you/project`. Asking instead whether EVERY argument stays
+ * inside cwd has no such hole: one absolute path, one `~`, one `..` that climbs
+ * out, and the answer is no.
+ *
+ * An unexpanded `$VAR` or backtick means we cannot know where the argument
+ * points, so it counts as unconfined — the guard fires rather than guesses.
+ */
+function segmentConfinedTo(args: string[], cwd: string): boolean {
+  const base = path.resolve(cwd);
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  for (const arg of args) {
+    if (!arg || arg.startsWith("-")) continue; // a flag, not a path
+    if (/[$`]/.test(arg)) return false; // unexpanded expansion — destination unknown
+    if (arg.startsWith("~") || path.isAbsolute(arg)) return false; // points outside by construction
+    let resolved: string;
+    try {
+      resolved = path.resolve(base, arg);
+    } catch {
+      return false;
+    }
+    if (resolved !== base && !resolved.startsWith(prefix)) return false; // climbed out via ..
+  }
+  return true;
+}
+
+/** Returns the first matching guard rule for a tool call, or null.
+ *
+ *  `cwd` is the session's working directory (Claude Code sends it on every hook
+ *  payload). It is used ONLY to resolve relative arguments while testing
+ *  exemptions — never to decide a match. Omitting it is always the safer
+ *  direction: fewer exemptions apply, so the guard fires more, not less. */
 export function checkGuards(
   guards: GuardsFile,
   toolName: string,
   toolInput: unknown,
+  cwd?: string,
 ): GuardMatch | null {
   const input = (toolInput ?? {}) as Record<string, unknown>;
   for (const rule of guards.rules) {
@@ -485,6 +527,11 @@ export function checkGuards(
         continue; // skip malformed user regex rather than crash the guard
       }
       const exempt = compileExcept(rule, (p) => new RegExp(p, "i"));
+      // A `cd` anywhere in the command means the hook's cwd is no longer where
+      // a later relative argument actually points (`cd / && rm -rf home`), so
+      // relative resolution is dropped for the whole command rather than
+      // guessed at. Dropping it can only make the guard fire more.
+      const relBase = cwd && !/(?:^|[\s;&|(])cd\s/.test(command) ? cwd : undefined;
       // Evaluate segment by segment so an exemption can clear ONE command
       // without clearing its neighbours. With no `except` the behaviour is
       // identical to matching the whole command: a pattern that matched the
@@ -499,7 +546,14 @@ export function checkGuards(
         // exemptions at all: nothing can wave through `rm -rf /`.
         if (exempt.length > 0) {
           const args = tokenizeArgs(segment);
+          // An argument that IS the exempted thing, as written.
           if (args.some((arg) => exempt.some((ex) => ex.test(arg)))) continue;
+          // Or: the session is sitting in exempted space and this segment never
+          // reaches outside it, which is how the same deletion looks when the
+          // agent has already cd'd there (`rm -rf home` in a scratchpad).
+          if (relBase && exempt.some((ex) => ex.test(relBase)) && segmentConfinedTo(args, relBase)) {
+            continue;
+          }
         }
         return { rule };
       }
