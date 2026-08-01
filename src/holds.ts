@@ -299,6 +299,30 @@ export function formatHoldReason(id: string, ruleReason: string): string {
 }
 
 /**
+ * The same park, addressed to the HUMAN instead of the agent.
+ *
+ * `formatHoldReason` above is written for the model — it redirects it to other
+ * work. Nothing in it reaches the person who has to type `reins approve` except
+ * by way of the agent choosing to repeat it. This is the line Claude Code puts
+ * in front of them directly (`systemMessage`), so a watched session shows its
+ * queue instead of burying it in tool output.
+ *
+ * Deliberately short: it is a notification, not a report. `reins pending` is
+ * still where the full proposal lives, and the Stop summary still catches the
+ * person who walked away.
+ */
+export function formatHoldNotice(id: string, tool: string, input: unknown): string {
+  const { summarizeToolInput, truncate } = require("./util") as typeof import("./util");
+  let what = tool;
+  try {
+    what = `${tool}  ${truncate(summarizeToolInput(tool, input), 60)}`;
+  } catch {
+    /* a summary is a nicety; the id and the command to run are the point */
+  }
+  return `[reins] ⏸ HELD  ${what}\n        approve: reins approve ${id}   ·   see all: reins pending`;
+}
+
+/**
  * The reason attached to a deferred hold. Unlike the deny reason above, this is
  * not a redirection: on defer the turn ends with the call still pending, so
  * there is no agent left mid-run to send elsewhere. It is written for the human

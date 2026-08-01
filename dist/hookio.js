@@ -10,14 +10,26 @@ exports.emitDefer = emitDefer;
 exports.emitPreToolContext = emitPreToolContext;
 exports.emitPostToolContext = emitPostToolContext;
 exports.emitNothing = emitNothing;
-function emitDeny(reason) {
-    process.stdout.write(JSON.stringify({
+/** `systemMessage` is the one field Claude Code shows to the HUMAN rather than
+ *  to the model, and it rides along inside the single permitted JSON object —
+ *  never as a second write, which would break the one-object protocol.
+ *
+ *  It exists because `permissionDecisionReason` is addressed to the agent: when
+ *  a hold parks, the person who has to type `reins approve` only learns about it
+ *  if the agent chooses to mention it, somewhere in a wall of tool output. For
+ *  the unattended run that is fine — the Stop summary catches them. For someone
+ *  watching their session, it is the difference between a queue and a guess. */
+function withNotice(obj, notice) {
+    return JSON.stringify(notice ? { ...obj, systemMessage: notice } : obj);
+}
+function emitDeny(reason, notice) {
+    process.stdout.write(withNotice({
         hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: "deny",
             permissionDecisionReason: reason,
         },
-    }));
+    }, notice));
 }
 /** Explicitly allow, bypassing Claude Code's own permission prompt for this
  *  call. Only used when a human already signed off out-of-band — i.e. a
@@ -53,14 +65,14 @@ function emitAsk(reason) {
  *  its assistant message — Claude Code silently ignores defer otherwise, which
  *  is why the hold gate never emits this unless it can tell defer will stick.
  *  See canDefer() in src/defer.ts. */
-function emitDefer(reason) {
-    process.stdout.write(JSON.stringify({
+function emitDefer(reason, notice) {
+    process.stdout.write(withNotice({
         hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: "defer",
             permissionDecisionReason: reason,
         },
-    }));
+    }, notice));
 }
 function emitPreToolContext(additionalContext) {
     process.stdout.write(JSON.stringify({

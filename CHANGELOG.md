@@ -3,6 +3,31 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **A parked action now tells the human directly.** `hold` was built for the run
+  nobody is watching, and it showed: `permissionDecisionReason` is addressed to
+  the *model*, so the person who has to type `reins approve` only learned about
+  the queue if the agent chose to mention it, somewhere in a wall of tool
+  output. Claude Code has exactly one field that reaches the user instead of the
+  model — `systemMessage` — and the hold gate now uses it:
+
+  ```
+  [reins] ⏸ HELD  Bash  git push origin main
+          approve: reins approve bb568799   ·   see all: reins pending
+  ```
+
+  It rides inside the single JSON object the hook already emits (a second write
+  would corrupt the stdout protocol), so nothing about the decision path
+  changes: same park, same deny, same one-shot approval. Notification is
+  first-park-only — a re-proposed action is the same decision, and re-notifying
+  teaches the reader to ignore the line that matters. No settings change, no
+  second terminal; it reaches every install by updating the package. The Stop
+  summary already reported actions still parked at the end of a run, and still
+  does — this is the same fact, delivered when it can still be acted on.
+
 ## [0.3.2]
 
 ### Fixed

@@ -41,6 +41,7 @@ exports.removePending = removePending;
 exports.writeDecision = writeDecision;
 exports.consumeDecision = consumeDecision;
 exports.formatHoldReason = formatHoldReason;
+exports.formatHoldNotice = formatHoldNotice;
 exports.formatDeferReason = formatDeferReason;
 exports.formatRefusalReason = formatRefusalReason;
 const crypto = __importStar(require("node:crypto"));
@@ -233,6 +234,30 @@ function formatHoldReason(id, ruleReason) {
         `until the developer approves it (\`reins approve ${id}\`). Do not retry it now: ` +
         `continue with work that does not depend on it, and mention the parked action ` +
         `(with its id) when you report back. If nothing else remains, finish and note it.`);
+}
+/**
+ * The same park, addressed to the HUMAN instead of the agent.
+ *
+ * `formatHoldReason` above is written for the model — it redirects it to other
+ * work. Nothing in it reaches the person who has to type `reins approve` except
+ * by way of the agent choosing to repeat it. This is the line Claude Code puts
+ * in front of them directly (`systemMessage`), so a watched session shows its
+ * queue instead of burying it in tool output.
+ *
+ * Deliberately short: it is a notification, not a report. `reins pending` is
+ * still where the full proposal lives, and the Stop summary still catches the
+ * person who walked away.
+ */
+function formatHoldNotice(id, tool, input) {
+    const { summarizeToolInput, truncate } = require("./util");
+    let what = tool;
+    try {
+        what = `${tool}  ${truncate(summarizeToolInput(tool, input), 60)}`;
+    }
+    catch {
+        /* a summary is a nicety; the id and the command to run are the point */
+    }
+    return `[reins] ⏸ HELD  ${what}\n        approve: reins approve ${id}   ·   see all: reins pending`;
 }
 /**
  * The reason attached to a deferred hold. Unlike the deny reason above, this is

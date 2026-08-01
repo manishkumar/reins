@@ -298,3 +298,39 @@ test("stop: a run ending with parked actions records holds-pending in outcomes",
   assert.match(runCli(["lastrun", "h9"], dir), /awaiting your approval/);
   assert.match(runCli(["sessions"], dir), /awaiting approval/);
 });
+
+test("pre-tool: a park tells the HUMAN directly, in the same single JSON object", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [HOLD_RULE]);
+  const out = runHook("pre-tool", PUSH_EVENT(dir, "hn1"), dir);
+
+  // The stdout protocol is ONE object, not two writes — a second JSON blob
+  // would corrupt the hook channel even though each half parses alone.
+  assert.strictEqual(out.trim().indexOf("}{"), -1, "must not emit two objects");
+  const parsed = JSON.parse(out);
+
+  // Agent-facing half unchanged.
+  assert.strictEqual(parsed.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(parsed.hookSpecificOutput.permissionDecisionReason, /parked for approval/);
+
+  // Human-facing half: systemMessage is the only field Claude Code shows the
+  // user. It has to carry the id and the action, so the reader can act without
+  // hunting through tool output for what the agent said.
+  assert.ok(parsed.systemMessage, "the human must be told directly");
+  assert.match(parsed.systemMessage, /HELD/);
+  assert.match(parsed.systemMessage, /origin main/);
+  const id = parsed.hookSpecificOutput.permissionDecisionReason.match(/id ([0-9a-f]{8})/)[1];
+  assert.match(parsed.systemMessage, new RegExp("reins approve " + id));
+});
+
+test("pre-tool: re-proposing a parked action does not re-notify the human", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [HOLD_RULE]);
+  const first = JSON.parse(runHook("pre-tool", PUSH_EVENT(dir, "hn2"), dir));
+  const again = JSON.parse(runHook("pre-tool", PUSH_EVENT(dir, "hn2"), dir));
+
+  assert.ok(first.systemMessage, "first park notifies");
+  assert.strictEqual(again.systemMessage, undefined, "the same park must not notify twice");
+  // Quieter is not weaker — it is still held.
+  assert.strictEqual(again.hookSpecificOutput.permissionDecision, "deny");
+});

@@ -7,6 +7,7 @@ import {
   consumeDecision,
   formatHoldReason,
   formatDeferReason,
+  formatHoldNotice,
   formatRefusalReason,
 } from "../holds";
 import { canDefer } from "../defer";
@@ -99,10 +100,15 @@ export async function runPreTool(): Promise<void> {
             reason: match.rule.reason,
             ts: nowIso(),
           });
+          // The notice goes to the human, the reason to the agent — one JSON
+          // object carrying both. Only on the FIRST park: a retry of an
+          // already-parked action is the same decision, and re-notifying would
+          // train the reader to ignore the line that matters.
+          const notice = existed ? undefined : formatHoldNotice(id, toolName, toolInput);
           if (transport === "defer") {
-            emitDefer(formatDeferReason(id, match.rule.reason));
+            emitDefer(formatDeferReason(id, match.rule.reason), notice);
           } else {
-            emitDeny(formatHoldReason(id, match.rule.reason));
+            emitDeny(formatHoldReason(id, match.rule.reason), notice);
           }
           // A retry of an already-parked action is the same decision, not a
           // new audit event — record the HELD row only the first time.
