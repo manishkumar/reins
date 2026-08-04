@@ -151,18 +151,29 @@ Rules live in **`.reins/policy.json`** (renamed from `guards.json` in 0.4 — ol
   <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
 </p>
 
-**`--ask` is the middle hardness.** Some actions aren't *never* — they're *check with me first* (pushes, prod-adjacent commands, package publishes). An `ask` rule doesn't veto; it makes Claude Code pause and show **you** the exact call with your rule's reason, and you approve or deny it in the moment (`permissionDecision: "ask"`). One thing to know: it needs a human at the terminal — in a headless/non-interactive run there's no one to ask, so `ask` effectively denies there. When you need a wall that holds unconditionally, that's `deny` (the default).
+**`--ask` is the middle hardness.** Some actions aren't *never* — they're *check with me first* (pushes, prod-adjacent commands, package publishes). An `ask` rule doesn't veto; it makes Claude Code pause and show **you** the exact call with your rule's reason, and you approve or deny it in the moment (`permissionDecision: "ask"`).
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/ask-prompt.svg" alt="A guard with --ask stopping a git push: Claude Code shows its own permission prompt with the reins rule's reason, and waits for the developer to answer yes or no" width="880">
+</p>
+
+One thing to know: it needs a human at the terminal — in a headless/non-interactive run there's no one to ask, so `ask` effectively denies there. When you need a wall that holds unconditionally, that's `deny` (the default); when nobody is watching, that's `--hold`, below.
 
 ### `--hold` — the approval queue, for the run nobody is watching
 
 `ask` needs you at the terminal. **`hold` is `ask` for the agent that runs while you sleep.** A hold rule doesn't kill the attempt against a wall — it **parks the proposed action** and waits for you. The run survives; the action doesn't happen without you.
 
-Since 0.4, hold has two transports, and reins picks between them for you:
+Since 0.4, hold has two transports — **defer**, which parks the real call inside Claude Code so approving replays the original, and **deny-and-queue**, which works everywhere. reins picks for you, and only picks defer when it can *prove* the run is headless.
+
+<details>
+<summary>How the two transports differ, and why the pick demands proof rather than a guess. <i>(expand)</i></summary>
 
 - **defer (preferred).** In an environment Claude Code is verified to honor it — print mode, `claude -p` or the SDK — reins returns `permissionDecision: "defer"`. Claude Code parks the *actual tool call* inside the session itself (the turn ends with `stop_reason: "tool_deferred"`) instead of copying it into a queue. Resuming the session (`claude --resume <id> -p "continue"`) replays that **exact** call through the hook, so approving runs the original proposal — the agent never has to reconstruct it.
 - **deny (the fallback, works everywhere).** Where defer isn't honored — an interactive terminal session, or any run reins can't confirm is headless — the attempt is denied as before and the proposal is copied into `.reins/pending/`. Approving lets an identical retry through; a still-running agent is steered to make it.
 
 reins only picks defer when it can **confirm** the run is headless (`claude -p` / the SDK) — it demands positive evidence, not a guess, so anything it can't confirm (an interactive session, Windows, or just not being able to tell) falls back to deny, because a hold that silently stopped holding is worse than one that just works everywhere. Override the pick with `"holdTransport": "auto" | "defer" | "deny"` in `.reins/config.json`.
+
+</details>
 
 ```bash
 reins guard add bash "git push" --hold        # park pushes instead of denying
@@ -176,16 +187,22 @@ reins deny ab12cd34 --steer "open a PR instead of pushing to main"
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/hold-queue.svg" alt="The full hold-queue exchange: a guard parks the agent's git push, reins pending lists it, reins deny refuses it with a steer, and the refusal is delivered into the running session" width="740">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/hold-queue.svg" alt="The full hold-queue loop: a hold rule parks the agent's npm install and shows you a one-line HELD notice with the approve command, reins pending lists it, reins approve signs it off, and the agent's retry runs at its next tool boundary" width="720">
 </p>
 
-> **Field note — the first action ever parked by this queue was reins' own release.** While building this feature we put a `--hold` rule on `git push` in this very repo. An agent session finished the work, tried to push its own commits, and got parked (`f27f93b3`, the exchange above). The developer refused it — `reins deny f27f93b3 --steer "i pushed myself"` — and the refusal reached the still-running agent at its next tool call, which acknowledged and moved on. The same afternoon the rule also parked a **false positive**: a script whose *text* merely mentioned the push command. That's the "form, not intent" caveat below doing exactly what it says — both halves of the trade-off, live, on day one.
+<details>
+<summary><b>Field note</b> — the first action ever parked by this queue was reins' own release, and the same afternoon it also parked a false positive. <i>(expand)</i></summary>
+
+> While building this feature we put a `--hold` rule on `git push` in this very repo. An agent session finished the work, tried to push its own commits, and got parked (`f27f93b3`). The developer refused it — `reins deny f27f93b3 --steer "i pushed myself"` — and the refusal reached the still-running agent at its next tool call, which acknowledged and moved on. The same afternoon the rule also parked a **false positive**: a script whose *text* merely mentioned the push command. That's the "form, not intent" caveat below doing exactly what it says — both halves of the trade-off, live, on day one.
+
+</details>
 
 `reins approve` writes a **one-shot decision keyed to the exact proposal** — the deferred call's own id when Claude Code preserved it, otherwise this session's exact input hash — and hands you what to do next: for a still-running deny-transport hold it steers the session to retry; for a deferred hold it prints the `claude --resume` command, because an approval nobody resumes is the quietest possible failure. Sessions that end with parked actions say so in `reins sessions` / `reins lastrun` (⏳ awaiting approval), and the trajectory (`reins audit`, below) records `HELD` / `APPROVED` / `REFUSED` with the rule and queue ids.
 
 **A park reads as one line, not a paragraph.** The deny reason was always on screen — Claude Code renders it as the tool's error — but it's sixty words aimed at redirecting the *model*, with the id and the approve command buried mid-sentence. reins now also puts a scannable line in front of *you*: `⏸ HELD  git push origin main`, and the exact `reins approve <id>` to run. No settings change, no second terminal. `reins watch` is still the right tool for several agents at once; this is for the session you're already looking at.
 
-The honest caveats, as always:
+<details>
+<summary><b>The honest caveats, as always</b> — what a hold can and can't promise: transport limits, one-shot exact approval, HOLD BREACH reporting, and why hold is the one thing in reins that fails <i>closed</i>. <i>(expand — read before you rely on it unattended)</i></summary>
 
 - **You're notified once per parked action, not once per attempt.** If the agent re-proposes something already in the queue, that's the same decision, and re-notifying would train you to ignore the line that matters. The action stays held either way — quieter is not weaker. The full queue is always `reins pending`.
 - **Defer is print-mode only.** Claude Code silently discards a deferred decision in an interactive terminal session. reins only uses defer when it can confirm the run is headless; on Windows, or whenever it can't tell, you always get the deny-and-queue fallback instead — the hold still holds, just via the mechanism that works everywhere rather than the native one.
@@ -196,6 +213,8 @@ The honest caveats, as always:
 - **Approval doesn't re-run anything.** It permits the retry or the replay; making it happen still needs a still-running agent to act on the steer, or that session to be resumed.
 - **Refusals land at the boundary.** `reins deny <id> [--steer "..."]` files the refusal, and the agent (or the resumed session) is told the moment it comes back for that exact action — it doesn't sit re-parked, unresolved, forever.
 - **Hold biases closed — uniquely in reins.** If parking itself fails (say `.reins/` is unwritable), the call is denied outright rather than allowed through. The fail-open caveat still applies one level up: a *crashing* hook process fails open, as everywhere.
+
+</details>
 
 Ships with a sane default denylist (override freely): recursive `rm` at a catastrophic target, recursive `rm` generally (with build artifacts and scratch dirs exempted — see below), `git push --force`, `git push --delete`, `git reset --hard`, `DROP/TRUNCATE`, `curl … | sh`, and writes to `.env*` / `.git/**`.
 
@@ -228,12 +247,15 @@ Every firing was a build artifact (`rm -rf .next`) or a scratch file. And the wo
 
 Meanwhile the things that repo could genuinely lose data to — `prisma`, `.env` reads, remote branch deletion — ran unguarded the entire time. A `git push --force-with-lease` was denied; `git push origin --delete <branch>` was not.
 
-Three changes came out of that, and they're the shape of the honest answer rather than a fix for it:
+<details>
+<summary>Four changes came out of that, and they're the shape of the honest answer rather than a fix for it: per-argument exemptions, a no-exemption <code>rm-catastrophic</code> rule, cwd-relative matching, and bypass <i>reporting</i> rather than escalation. <i>(expand)</i></summary>
 
 - **Exemptions, matched per argument.** Rules take an `except` list, so `rm -rf` ignores `.next`, `dist`, `node_modules`, `/tmp` and friends. Exemptions are evaluated per command segment and per argument — `rm -rf .next && rm -rf /` is still blocked, and `rm -rf "my build dir"` is not exempted by the word *build* appearing in a phrase.
 - **`rm-catastrophic`**, a separate rule with **no exemptions**, for `/`, `~`, `$HOME`, `..` and system directories. Ordered first, so no exemption list can ever wave those through.
 - **Exemptions read relative paths from where the agent is standing.** An agent that has already `cd`'d into its scratchpad writes `rm -rf home proj`, not the absolute path — so a `/tmp` exemption written as an absolute prefix never matched the one case it existed for. A relative deletion is now judged from the session's `cwd`. The widening is deliberately narrow: it applies only when the cwd is itself exempted **and every argument in the segment stays inside it**. One absolute path, one `~`, one unexpanded `$VAR`, one `..` that climbs out, or a `cd` anywhere in the command, and the guard fires as before.
 - **Bypass reporting.** reins now notices when a denied command's intent runs anyway and says so — per event, and in a session summary at the end of the run. It does *not* widen the guard in response: that's an arms race pattern-matching cannot win. It tells you, so you can fix the rule or make it a `hold`.
+
+</details>
 
 > A guard that is wrong every time is worse than no guard. It trains the agent to route around it and trains you to uninstall it. If reins reports a bypass, the useful response is usually to narrow the rule — or to stop pretending a `deny` can hold something and make it a `--hold` instead.
 
@@ -421,6 +443,9 @@ A crashing hook **fails open** (the agent proceeds) so a bug in `reins` can neve
 
 ## Command reference
 
+<details>
+<summary>Every command, one line each — the same list <code>reins --help</code> prints. <i>(expand)</i></summary>
+
 ```text
 reins init [--print|--local]     Set up .reins/ and wire (or print) the hooks
 reins uninstall [--purge]        Remove the hooks (--purge also drops .reins/)
@@ -447,9 +472,11 @@ reins loops                      Sessions where the agent looped
 reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)
 ```
 
+</details>
+
 ## How it works (one breath)
 
-Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny, ask, or hold — parked via `defer` where Claude Code honors it, else deny-and-queue) then steering (inject + clear). `post-tool` records the call, raises the loop alarm on consecutive repeats, and flags a `HOLD BREACH` if a still-parked action executed anyway. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run — noting any actions still parked. State lives in `.reins/`: `steering.txt`, `policy.json` (`guards.json` before 0.4, still read), `pending/`, `decided/` (`allowed/` before 0.4, still read), `config.json`, `runs.db`. CLI commands find `.reins/` by walking up from your current directory, so they work from any subdirectory of the project.
+Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny, ask, or hold — parked via `defer` where Claude Code honors it, else deny-and-queue) then steering (inject + clear). `post-tool` records the call, raises the loop alarm on consecutive repeats, and flags a `HOLD BREACH` if a still-parked action executed anyway. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run — noting any actions still parked. State lives in `.reins/`: `steering.txt`, `policy.json` (`guards.json` before 0.4, still read), `pending/`, `decided/` (`allowed/` before 0.4, still read), `config.json`, `runs.db`. Both the CLI and the hooks find `.reins/` by walking up to the nearest one — commands work from any subdirectory, and a tool call the agent makes after `cd`-ing into one still sees the project's own rules, steering and approval queue (the hooks' walk is bounded by `$CLAUDE_PROJECT_DIR`, so it never climbs above the session root).
 
 The file formats and decision semantics behind guards/steering/holds are written up separately, vendor-neutral, in [SPEC.md](SPEC.md) — not a standard, just a description of what reins does, in case another harness ever wants the same gate.
 
