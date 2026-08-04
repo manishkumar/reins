@@ -10,8 +10,10 @@
 // colors survive), then run it through this.
 //
 // Understands the subset of ANSI that src/commands/format.ts emits — SGR codes
-// 0/1/2/31-36 — and silently drops any other escape sequence (cursor moves,
-// erases) that a pty capture drags along.
+// 0/1/2/31-36 — plus the 256-color and truecolor forms the Claude Code TUI
+// paints in, since some captures are of a live session rather than of a reins
+// command. Any other escape sequence (cursor moves, erases) that a pty capture
+// drags along is silently dropped.
 
 import * as fs from "node:fs";
 
@@ -34,6 +36,24 @@ const COLORS = {
   36: "#39c5cf", // cyan
 };
 const DIM = "#8b949e";
+
+/** xterm-256 index -> hex. The first 16 reuse the palette above so a reins
+ *  command and a TUI capture that name the same color still look the same;
+ *  16-231 are the 6×6×6 cube, 232-255 the grayscale ramp. */
+function xterm256(n) {
+  const BASE = [
+    "#0d1117", "#ff7b72", "#3fb950", "#d29922", "#58a6ff", "#bc8cff", "#39c5cf", "#e6edf3",
+    "#6e7681", "#ff7b72", "#3fb950", "#d29922", "#58a6ff", "#bc8cff", "#39c5cf", "#ffffff",
+  ];
+  if (n < 16) return BASE[n];
+  const hex = (v) => v.toString(16).padStart(2, "0");
+  if (n < 232) {
+    const i = n - 16;
+    const lv = [0, 95, 135, 175, 215, 255];
+    return "#" + hex(lv[Math.floor(i / 36) % 6]) + hex(lv[Math.floor(i / 6) % 6]) + hex(lv[i % 6]);
+  }
+  return "#" + hex(8 + (n - 232) * 10).repeat(3);
+}
 
 const FONT = "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
 const FONT_SIZE = 13;
@@ -70,10 +90,20 @@ function parseLine(line) {
         i += m[0].length - 1;
         if (m[2] === "m") {
           flush();
-          for (const code of (m[1] || "0").split(";").map(Number)) {
+          const codes = (m[1] || "0").split(";").map(Number);
+          for (let k = 0; k < codes.length; k++) {
+            const code = codes[k];
             if (code === 0) (color = null), (bold = false), (dim = false);
             else if (code === 1) bold = true;
             else if (code === 2) dim = true;
+            else if (code === 22) (bold = false), (dim = false);
+            else if (code === 39) color = null;
+            // Extended color: `38;5;N` (256-color) and `38;2;R;G;B` (truecolor)
+            // consume their arguments, so advance k past them.
+            else if (code === 38 && codes[k + 1] === 5) (color = xterm256(codes[k + 2])), (k += 2);
+            else if (code === 38 && codes[k + 1] === 2)
+              (color = `rgb(${codes[k + 2]},${codes[k + 3]},${codes[k + 4]})`), (k += 4);
+            else if (code >= 90 && code <= 97) color = xterm256(code - 90 + 8);
             else if (COLORS[code]) color = COLORS[code];
           }
         }
@@ -102,8 +132,13 @@ parsed.forEach((spans, row) => {
   for (const s of spans) {
     const fill = s.color ?? (s.dim ? DIM : FG);
     const weight = s.bold ? ' font-weight="700"' : "";
-    // x is set per-tspan so glyph-width drift can never accumulate.
-    tspans += `<tspan x="${(PAD_X + col * CHAR_W).toFixed(1)}" fill="${fill}"${weight}>${esc(s.text)}</tspan>`;
+    // x is set per-tspan so glyph-width drift can never accumulate, and
+    // textLength pins each span to exactly its column count — CHAR_W is a
+    // measurement of ONE font, and a viewer that falls back to a wider one
+    // would otherwise overrun the next span (and the frame) by a few percent.
+    tspans +=
+      `<tspan x="${(PAD_X + col * CHAR_W).toFixed(1)}" textLength="${(s.text.length * CHAR_W).toFixed(1)}"` +
+      ` lengthAdjust="spacingAndGlyphs" fill="${fill}"${weight}>${esc(s.text)}</tspan>`;
     col += s.text.length;
   }
   body += `<text y="${y}" xml:space="preserve">${tspans}</text>\n`;

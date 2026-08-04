@@ -178,3 +178,93 @@ test("asked row's hash differs from the executed call's (no loop-count inflation
   assert.strictEqual(rows.length, 2);
   assert.notStrictEqual(rows[0].input_hash, rows[1].input_hash);
 });
+
+// ---------- the project root, seen from a subdirectory ----------
+//
+// Claude Code's event `cwd` is the working directory of the TOOL CALL, not the
+// project root — one `cd packages/api` in a Bash call and every later event
+// carries the subdirectory. These are the behaviors that silently stopped
+// working when the hooks took that path verbatim.
+
+/** Run a hook with the event cwd set to a subdirectory of the project, the way
+ *  Claude Code reports a tool call made after the agent has cd'd. */
+function runHookFromSubdir(name, event, project, sub) {
+  const dir = path.join(project, sub);
+  fs.mkdirSync(dir, { recursive: true });
+  return execFileSync(process.execPath, [CLI, "hook", name], {
+    input: JSON.stringify({ ...event, cwd: dir }),
+    cwd: dir,
+    encoding: "utf8",
+    // Pin the session root: without it the suite inherits whatever the shell
+    // running the tests happens to have set.
+    env: { ...process.env, CLAUDE_PROJECT_DIR: project },
+  }).trim();
+}
+
+test("pre-tool: a hand-written rule still fires for a tool call made from a subdirectory", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [
+    { id: "pytest-deny", type: "bash", pattern: "pytest", reason: "no pytest here" },
+  ]);
+  const out = runHookFromSubdir(
+    "pre-tool",
+    { tool_name: "Bash", tool_input: { command: "pytest -x" } },
+    dir,
+    "packages/api",
+  );
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.hookSpecificOutput.permissionDecision, "deny");
+  assert.strictEqual(parsed.hookSpecificOutput.permissionDecisionReason, "no pytest here");
+});
+
+test("pre-tool: steering queued at the root is delivered from a subdirectory", () => {
+  const dir = tmpProject();
+  fs.writeFileSync(path.join(dir, ".reins", "steering.txt"), "stay in the auth module\n");
+  const out = runHookFromSubdir(
+    "pre-tool",
+    { tool_name: "Bash", tool_input: { command: "ls" } },
+    dir,
+    "packages/api",
+  );
+  const parsed = JSON.parse(out);
+  assert.match(parsed.hookSpecificOutput.additionalContext, /stay in the auth module/);
+  // ...and consumed from the root's queue, not a phantom one in the subdirectory.
+  assert.strictEqual(fs.existsSync(path.join(dir, ".reins", "steering.txt")), false);
+});
+
+test("hooks never create a second .reins in a subdirectory", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [{ id: "noop", type: "bash", pattern: "zzz-never-matches" }]);
+  runHookFromSubdir(
+    "pre-tool",
+    { session_id: "sub1", tool_name: "Bash", tool_input: { command: "ls" } },
+    dir,
+    "packages/api",
+  );
+  runHookFromSubdir(
+    "post-tool",
+    { session_id: "sub1", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: {} },
+    dir,
+    "packages/api",
+  );
+  assert.strictEqual(fs.existsSync(path.join(dir, "packages", "api", ".reins")), false);
+});
+
+test("hold: an approval filed at the root is seen by a call proposed from a subdirectory", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [
+    { id: "publish-hold", type: "bash", pattern: "npm\\s+publish", reason: "sign-off needed", action: "hold" },
+  ]);
+  const event = { session_id: "h1", tool_name: "Bash", tool_input: { command: "npm publish" } };
+  // Parked from the subdirectory...
+  const parked = JSON.parse(runHookFromSubdir("pre-tool", event, dir, "packages/api"));
+  assert.strictEqual(parked.hookSpecificOutput.permissionDecision, "deny");
+  const id = /id ([0-9a-f]{8})/.exec(parked.hookSpecificOutput.permissionDecisionReason)[1];
+
+  // ...listed and approved at the root, where the human works.
+  execFileSync(process.execPath, [CLI, "approve", id], { cwd: dir, encoding: "utf8" });
+
+  // ...and the retry, still reported from the subdirectory, is let through.
+  const retry = JSON.parse(runHookFromSubdir("pre-tool", event, dir, "packages/api"));
+  assert.strictEqual(retry.hookSpecificOutput.permissionDecision, "allow");
+});

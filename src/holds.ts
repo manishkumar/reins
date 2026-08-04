@@ -299,6 +299,35 @@ export function formatHoldReason(id: string, ruleReason: string): string {
 }
 
 /**
+ * The same park, addressed to the HUMAN instead of the agent.
+ *
+ * Not a visibility fix — `permissionDecisionReason` already reaches the user,
+ * rendered as the tool's error. A legibility one. That text is sixty words
+ * written to redirect a model, with the id and the approve command buried
+ * mid-sentence; scanning it is work, and the person watching a run is doing
+ * something else. This is the same fact as one scannable line, in the one field
+ * (`systemMessage`) Claude Code shows the user and not the model.
+ *
+ * The tool name is deliberately absent: Claude Code prefixes the line with its
+ * own attribution (`PreToolUse:Bash says:`), so repeating it here just pushes
+ * the command — the part you actually read — further right.
+ *
+ * Deliberately short: it is a notification, not a report. `reins pending` is
+ * still where the full proposal lives, and the Stop summary still catches the
+ * person who walked away.
+ */
+export function formatHoldNotice(id: string, tool: string, input: unknown): string {
+  const { summarizeToolInput, truncate } = require("./util") as typeof import("./util");
+  let what = tool;
+  try {
+    what = truncate(summarizeToolInput(tool, input), 60);
+  } catch {
+    /* a summary is a nicety; the id and the command to run are the point */
+  }
+  return `[reins] ⏸ HELD  ${what}\n  approve: reins approve ${id}   ·   see all: reins pending`;
+}
+
+/**
  * The reason attached to a deferred hold. Unlike the deny reason above, this is
  * not a redirection: on defer the turn ends with the call still pending, so
  * there is no agent left mid-run to send elsewhere. It is written for the human

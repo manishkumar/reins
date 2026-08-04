@@ -61,6 +61,23 @@ export function cmdDoctor(): number {
       "pending holds",
       holds > 0 ? `${holds} awaiting approval — reins pending` : "none",
     );
+    // Strays left by the pre-0.4.1 resolution bug (hooks took the tool call's
+    // cwd verbatim, so a `cd` into a subdirectory created a second .reins
+    // there). Fixing the resolution doesn't heal them: from inside that
+    // subdirectory the stray is still the NEAREST ancestor, so it keeps
+    // winning. Report, never delete — one of these can legitimately be a
+    // nested project, and dropping someone's runs.db is not doctor's job.
+    const strays = findNestedReinsDirs(path.dirname(dir));
+    if (strays.length > 0) {
+      problems++;
+      line(WARN, "stray .reins dirs", `${strays.length} below the project root — see below`);
+      for (const s of strays) line(WARN, "  ", s);
+      line(
+        WARN,
+        "  ",
+        "each shadows your policy for tool calls made from inside it; remove if not a nested project",
+      );
+    }
   } else {
     problems++;
     line(WARN, ".reins dir", "not initialized — run `reins init`");
@@ -155,6 +172,37 @@ function checkSettings(
   const sym = wired.length === events.length ? OK : WARN;
   line(sym, label, `${wired.join(", ")} wired`);
   return wired.length === events.length;
+}
+
+/**
+ * Find `.reins/` directories nested below the project root.
+ *
+ * Deliberately shallow and cheap — doctor runs interactively, and a stray from
+ * an agent's `cd` lands in a working directory, not twelve levels into a
+ * dependency tree. Skips the usual unwalkable/uninteresting places, and never
+ * throws: a diagnostic that dies on one unreadable directory is worse than one
+ * that reports what it could read.
+ */
+function findNestedReinsDirs(root: string, maxDepth = 4): string[] {
+  const SKIP = new Set([".git", ".reins", "node_modules", "dist", "build", "out", "coverage", ".next"]);
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || SKIP.has(e.name)) continue;
+      const child = path.join(dir, e.name);
+      if (fs.existsSync(path.join(child, ".reins"))) found.push(path.join(child, ".reins"));
+      walk(child, depth + 1);
+    }
+  };
+  walk(root, 1);
+  return found;
 }
 
 function reinsVersion(): string {

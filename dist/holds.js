@@ -41,6 +41,7 @@ exports.removePending = removePending;
 exports.writeDecision = writeDecision;
 exports.consumeDecision = consumeDecision;
 exports.formatHoldReason = formatHoldReason;
+exports.formatHoldNotice = formatHoldNotice;
 exports.formatDeferReason = formatDeferReason;
 exports.formatRefusalReason = formatRefusalReason;
 const crypto = __importStar(require("node:crypto"));
@@ -233,6 +234,35 @@ function formatHoldReason(id, ruleReason) {
         `until the developer approves it (\`reins approve ${id}\`). Do not retry it now: ` +
         `continue with work that does not depend on it, and mention the parked action ` +
         `(with its id) when you report back. If nothing else remains, finish and note it.`);
+}
+/**
+ * The same park, addressed to the HUMAN instead of the agent.
+ *
+ * Not a visibility fix — `permissionDecisionReason` already reaches the user,
+ * rendered as the tool's error. A legibility one. That text is sixty words
+ * written to redirect a model, with the id and the approve command buried
+ * mid-sentence; scanning it is work, and the person watching a run is doing
+ * something else. This is the same fact as one scannable line, in the one field
+ * (`systemMessage`) Claude Code shows the user and not the model.
+ *
+ * The tool name is deliberately absent: Claude Code prefixes the line with its
+ * own attribution (`PreToolUse:Bash says:`), so repeating it here just pushes
+ * the command — the part you actually read — further right.
+ *
+ * Deliberately short: it is a notification, not a report. `reins pending` is
+ * still where the full proposal lives, and the Stop summary still catches the
+ * person who walked away.
+ */
+function formatHoldNotice(id, tool, input) {
+    const { summarizeToolInput, truncate } = require("./util");
+    let what = tool;
+    try {
+        what = truncate(summarizeToolInput(tool, input), 60);
+    }
+    catch {
+        /* a summary is a nicety; the id and the command to run are the point */
+    }
+    return `[reins] ⏸ HELD  ${what}\n  approve: reins approve ${id}   ·   see all: reins pending`;
 }
 /**
  * The reason attached to a deferred hold. Unlike the deny reason above, this is

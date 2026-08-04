@@ -3,6 +3,63 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **A parked action now says so in one scannable line.** `hold` was built for
+  the run nobody is watching, and it showed. The deny reason was always visible
+  — Claude Code renders it as the tool's error — but it is sixty words written
+  to redirect a *model*, with the id and the approve command buried mid-sentence.
+  Claude Code has exactly one field that reaches the user instead of the model —
+  `systemMessage` — and the hold gate now uses it:
+
+  ```
+  [reins] ⏸ HELD  Bash  git push origin main
+          approve: reins approve bb568799   ·   see all: reins pending
+  ```
+
+  It rides inside the single JSON object the hook already emits (a second write
+  would corrupt the stdout protocol), so nothing about the decision path
+  changes: same park, same deny, same one-shot approval. Notification is
+  first-park-only — a re-proposed action is the same decision, and re-notifying
+  teaches the reader to ignore the line that matters. No settings change, no
+  second terminal; it reaches every install by updating the package. The Stop
+  summary already reported actions still parked at the end of a run, and still
+  does — this is the same fact, delivered when it can still be acted on.
+
+### Fixed
+
+- **Your own guard rules stopped applying once the agent `cd`'d into a
+  subdirectory.** Read that as a security fix, not a papercut. The hooks took
+  the event's `cwd` verbatim as the project root, but Claude Code reports the
+  working directory of the *tool call* — and the Bash tool keeps a persistent
+  shell cwd, so a single `cd packages/api` made every later hook look for
+  `.reins/` in a directory that doesn't have one. Nothing errored, because "no
+  `.reins/`" is indistinguishable from "not set up yet": guards fell back to
+  the built-in defaults (so `rm -rf /` still held, and nothing *looked*
+  broken) while every rule you wrote yourself — including `--ask` and `--hold`
+  rules, and anything from `reins scan --accept` — silently stopped matching.
+  Steering queued at the root wasn't delivered at those boundaries (it stayed
+  queued, so the Stop hook still handed it over — late, not lost), approvals
+  filed at the root weren't seen by the call that needed them, and capture
+  created a second `.reins/` in the subdirectory, splitting the run's history
+  across two databases.
+
+  Hooks now resolve the project the way user-facing commands always have — by
+  walking up from the given directory to the nearest `.reins/` — bounded by
+  `$CLAUDE_PROJECT_DIR` so an uninitialized project can never climb past
+  itself and adopt an ancestor's state (a stray `~/.reins`, say). The walk
+  fails open: an unreadable directory mid-climb falls back to where it started
+  rather than disturbing the host run.
+
+- **`reins doctor` now reports stray `.reins/` directories** nested below the
+  project root. Fixing the resolution doesn't heal a repo the bug already
+  touched — from inside that subdirectory the stray is still the *nearest*
+  ancestor, so it keeps shadowing your policy. Doctor names them and leaves
+  them alone; one could be a legitimately nested project, and deleting
+  someone's `runs.db` is not a diagnostic's job.
+
 ## [0.3.2]
 
 ### Fixed
