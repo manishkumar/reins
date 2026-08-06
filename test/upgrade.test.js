@@ -149,9 +149,14 @@ test("reins doctor: flags a stale policy as a note", () => {
 });
 
 test("planUpgrade: at the current generation, a differing rule is the USER's edit", () => {
-  // Same version + different content means nothing new shipped, so the change
-  // came from them. Refreshing it would silently undo their work.
-  const mine = { ...DEFAULT_RULES.find((r) => r.id === "rm-rf"), pattern: "my-own-narrower-pattern" };
+  // A rule whose OWN origin says it was written at this generation, yet differs:
+  // nothing new shipped, so the change came from them. Refreshing it would
+  // silently undo their work.
+  const mine = {
+    ...DEFAULT_RULES.find((r) => r.id === "rm-rf"),
+    origin: `default@${POLICY_VERSION}`,
+    pattern: "my-own-narrower-pattern",
+  };
   const plan = planUpgrade({ rules: [mine], version: POLICY_VERSION });
   assert.deepStrictEqual(plan.customizedRuleIds, ["rm-rf"]);
   assert.strictEqual(plan.nextRules.find((r) => r.id === "rm-rf").pattern, "my-own-narrower-pattern");
@@ -159,9 +164,51 @@ test("planUpgrade: at the current generation, a differing rule is the USER's edi
   assert.ok(plan.changes.some((ch) => ch.kind === "added" && ch.id === "rm-catastrophic"));
 });
 
+// The freeze, measured in a real repo: `.reins/policy.json` stamped v2 while
+// every rule body was still June's, because `saveGuards` invented a version for
+// an unversioned file. `policy upgrade` then read that stamp and filed the
+// stale rules under "you customized these" — with no way back, since the
+// version could never fall behind again. Both halves are pinned below.
+test("planUpgrade: a rule with no origin is stale, whatever the file is stamped", () => {
+  const stale = { ...DEFAULT_RULES.find((r) => r.id === "rm-rf"), pattern: "old-shipped-pattern" };
+  delete stale.origin;
+  const plan = planUpgrade({ rules: [stale], version: POLICY_VERSION });
+  assert.deepStrictEqual(plan.customizedRuleIds, []);
+  const change = plan.changes.find((c) => c.id === "rm-rf");
+  assert.strictEqual(change.kind, "updated");
+  // Refreshed, and honest that it couldn't tell stale from hand-edited.
+  assert.strictEqual(change.unknownProvenance, true);
+  assert.notStrictEqual(plan.nextRules.find((r) => r.id === "rm-rf").pattern, "old-shipped-pattern");
+  // And doctor has something to say rather than "v2 (current)".
+  assert.match(stalenessNote(plan), /rule bodies older/);
+});
+
+test("planUpgrade: an origin of `user` is never touched, whatever the id", () => {
+  // The escape hatch the upgrade diff points at: claim a shipped id as yours.
+  const mine = { id: "rm-rf", type: "bash", pattern: "mine", reason: "mine", origin: "user" };
+  const plan = planUpgrade({ rules: [mine], version: POLICY_VERSION });
+  assert.deepStrictEqual(plan.userRuleIds, ["rm-rf"]);
+  assert.strictEqual(plan.nextRules.find((r) => r.id === "rm-rf").pattern, "mine");
+});
+
+test("saveGuards: an unversioned policy file is never stamped with a version", () => {
+  const dir = tmpProject(LEGACY_POLICY);
+  // Any ordinary edit re-saves the file; it must not acquire a version it never
+  // earned — that stamp is what made the staleness permanent.
+  run(["guard", "add", "bash", "definitely-not-a-real-command"], dir);
+  const file = JSON.parse(fs.readFileSync(path.join(dir, ".reins", "policy.json"), "utf8"));
+  assert.strictEqual(file.version, undefined);
+  assert.ok(hasWork(planUpgrade(loadGuards(dir))));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("planUpgrade: an OLDER generation does get its rules refreshed", () => {
   // The mirror image: a version behind means the difference is upstream's.
-  const stale = { ...DEFAULT_RULES.find((r) => r.id === "rm-rf"), pattern: "old-shipped-pattern" };
+  const stale = {
+    ...DEFAULT_RULES.find((r) => r.id === "rm-rf"),
+    origin: `default@${POLICY_VERSION - 1}`,
+    pattern: "old-shipped-pattern",
+  };
   const plan = planUpgrade({ rules: [stale], version: POLICY_VERSION - 1 });
   assert.deepStrictEqual(plan.customizedRuleIds, []);
   assert.notStrictEqual(plan.nextRules.find((r) => r.id === "rm-rf").pattern, "old-shipped-pattern");
