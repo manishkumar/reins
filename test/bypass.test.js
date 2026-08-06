@@ -21,6 +21,8 @@ const {
   formatSummary,
   clearSession,
   BYPASS_SIMILARITY,
+  actionTokens,
+  retryScore,
 } = require("../dist/bypass.js");
 
 function tmpProject() {
@@ -173,4 +175,41 @@ test("the ledger never throws into a hook, even on a corrupt file", () => {
   assert.doesNotThrow(() => summarizeSession(dir, "s1"));
   assert.doesNotThrow(() => recordDenial(dir, { session_id: "s1", ts: new Date().toISOString(), rule_id: "r", tool: "Bash", summary: "x", fp: ["x"] }));
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// The action words have to survive too — found by auditing real capture, where
+// a denied force-push was reported as bypassed by an innocent `git fetch`.
+test("actionTokens: keeps the bare words, drops paths, refs and assignments", () => {
+  // Not a verb extractor — `origin` survives too. It only has to drop the parts
+  // that are unmistakably targets, so what's left is dominated by the action.
+  assert.deepStrictEqual(actionTokens(fingerprint("cd /repo && git push --force origin feat/x")), [
+    "cd",
+    "git",
+    "origin",
+    "push",
+  ]);
+  assert.deepStrictEqual(actionTokens(fingerprint("SP=/tmp/scratch rm -rf $SP/build")), ["rm"]);
+});
+
+test("retryScore: a changed verb on the same target is not a retry", () => {
+  const denied = fingerprint("cd /repo && git push --force-with-lease origin feat/x");
+  // Token containment alone says 86% — enough to be reported without this check.
+  assert.ok(containment(denied, fingerprint("cd /repo && git fetch origin feat/x")) >= BYPASS_SIMILARITY);
+  assert.strictEqual(retryScore(denied, fingerprint("cd /repo && git fetch origin feat/x")), 0);
+});
+
+test("retryScore: the flag-drop this all exists for still scores", () => {
+  for (const [denied, executed] of REAL_BYPASS_PAIRS) {
+    assert.ok(
+      retryScore(fingerprint(denied), fingerprint(executed)) >= BYPASS_SIMILARITY,
+      `should still catch: ${denied}`,
+    );
+  }
+});
+
+test("retryScore: a bare-path deletion with no words left still scores", () => {
+  // Nothing word-shaped survives `rm -rf ./build/x.js` but the verb itself;
+  // the token measure has to stand on its own there.
+  const denied = fingerprint("rm -rf ./build/x.js");
+  assert.ok(retryScore(denied, fingerprint("rm ./build/x.js")) >= BYPASS_SIMILARITY);
 });
