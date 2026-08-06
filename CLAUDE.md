@@ -78,7 +78,12 @@ will never see. That is the frame for everything below.
     the fix shipped. `reins policy upgrade` is the delivery path, `reins doctor`
     is the notification, and the version bump is what arms both. Upgrades never
     clobber: a user's `action`/`expires` on a shipped rule survives, and
-    hand-written rules are never touched.
+    hand-written rules are never touched. **Staleness is a property of a rule,
+    not of the file** — read it off each rule's `origin`. Reading it off the
+    file's `version` is how the same repo stayed frozen a second time: writing
+    the file stamped it "current" while its rule bodies stayed old, and the
+    upgrade then read that stamp and filed every stale rule as a user
+    customization, forever. Never write a version a caller didn't have.
 
 11. **Generated rules are never `deny`.** Anything `reins scan` proposes is a
     guess about a stranger's repo, and it lands as `hold` or `ask` in a staging
@@ -92,7 +97,13 @@ will never see. That is the frame for everything below.
     chase the variant is an arms race pattern matching cannot win, and it would
     turn a reporting feature into a decision the DB could influence (see 1 and
     4). The ledger is a plain file for the same reason capture can't be trusted
-    here: "your guard didn't hold" must not vanish on Node < 22.5.
+    here: "your guard didn't hold" must not vanish on Node < 22.5. `reins audit
+    --guards` is the retrospective view of the same facts, read from the DB
+    (which is allowed — it decides nothing) and scored with the *same*
+    similarity measure as the live check, so the two can never disagree. A claim
+    that loaded must not be over-claimed: the measure requires the action words
+    to survive, not just the tokens, or a `git fetch` reads as a bypassed
+    `git push --force`.
 
 ## Judgment calls that keep recurring
 

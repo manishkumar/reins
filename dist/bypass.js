@@ -56,6 +56,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.BYPASS_WINDOW_MS = exports.BYPASS_SIMILARITY = void 0;
 exports.fingerprint = fingerprint;
 exports.containment = containment;
+exports.actionTokens = actionTokens;
+exports.retryScore = retryScore;
 exports.recordDenial = recordDenial;
 exports.findBypass = findBypass;
 exports.markBypassed = markBypassed;
@@ -125,6 +127,43 @@ function containment(denied, executed) {
         return 0;
     return shared / A.size;
 }
+/**
+ * The subset of a fingerprint that says what was DONE rather than to what.
+ *
+ * Bare words — no slash, no dot, no `=` — so `git`, `push`, `rm`, `rmdir`
+ * survive while paths, URLs, branch refs and env assignments drop out. Crude on
+ * purpose: this is not a shell parser, it's a second opinion.
+ */
+function actionTokens(tokens) {
+    return tokens.filter((t) => /^[a-z][a-z0-9-]*$/.test(t));
+}
+/**
+ * Did this executed command retry the denied one's intent? Score, or 0.
+ *
+ * Containment over ALL tokens is the primary measure (see above), but on its
+ * own it mistakes a change of verb for a workaround, because fingerprinting
+ * drops flags: a denied `cd repo && git push --force-with-lease origin feat/x`
+ * shares six of its seven tokens with an innocent `cd repo && git fetch origin
+ * feat/x` — 86%, reported as a bypass of a push that never happened. Found by
+ * running the audit over real capture, where it was 1 of 8 reported hits.
+ *
+ * So the action words have to survive too. It can only ever REMOVE a hit, never
+ * add one, which is the right direction for a claim as loaded as "your guard
+ * didn't hold" — and it leaves the case this all exists for untouched, since
+ * `rm -rf x` → `rm x` keeps its verb while shedding the flag that was matched.
+ */
+function retryScore(deniedFp, executedFp) {
+    const score = containment(deniedFp, executedFp);
+    if (score < exports.BYPASS_SIMILARITY)
+        return 0;
+    const deniedWords = actionTokens(deniedFp);
+    // Nothing word-shaped to check (a bare path deletion) — the token measure stands.
+    if (deniedWords.length === 0)
+        return score;
+    if (containment(deniedWords, actionTokens(executedFp)) < exports.BYPASS_SIMILARITY)
+        return 0;
+    return score;
+}
 function readLedger(cwd) {
     try {
         const raw = fs.readFileSync(ledgerPath(cwd), "utf8");
@@ -187,8 +226,8 @@ function findBypass(cwd, sessionId, command, now = new Date()) {
         const gapMs = now.getTime() - Date.parse(denial.ts);
         if (!(gapMs >= 0 && gapMs <= exports.BYPASS_WINDOW_MS))
             continue;
-        const score = containment(denial.fp ?? [], fp);
-        if (score < exports.BYPASS_SIMILARITY)
+        const score = retryScore(denial.fp ?? [], fp);
+        if (score === 0)
             continue;
         if (!best || score > best.score)
             best = { denial, score, gapMs };

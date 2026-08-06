@@ -175,6 +175,8 @@ USAGE
   reins lastrun [session-prefix]   Readable account of the most recent run
   reins audit [session-prefix]     Chronological trail of gate decisions (deny/ask/hold/allow)
   reins audit [session] --json     Same trail as raw JSON, for scripting
+  reins audit --guards             Were the guards right? Every denial scored:
+                                   stale rules, and vetoes worked around anyway
   reins sessions                   List recent sessions in this project
   reins watch                      Live cockpit: all agents, steer any one
   reins report [--open]            Write a local HTML report of every run
