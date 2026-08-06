@@ -259,6 +259,30 @@ Meanwhile the things that repo could genuinely lose data to — `prisma`, `.env`
 
 > A guard that is wrong every time is worse than no guard. It trains the agent to route around it and trains you to uninstall it. If reins reports a bypass, the useful response is usually to narrow the rule — or to stop pretending a `deny` can hold something and make it a `--hold` instead.
 
+#### `reins audit --guards` — check yours the same way
+
+That measurement was done by hand, once. It's a command now:
+
+```bash
+reins audit --guards          # every denial this project ever recorded, scored
+reins audit --guards --json   # same, for scripting
+```
+
+```text
+reins · guard audit  18 denials across 10 sessions
+
+  rm-rf     16 fired · 15 wouldn't fire under today's shipped rules · 5 worked around, fastest 10s
+      ↻ 2026-07-25 rm -f src/app/pdf-harness/page.tsx && rmdir src/app/pdf-harness
+        ran anyway 10s later: rm src/app/pdf-harness/page.tsx && rmdir src/app/pdf-harness
+```
+
+Two verdicts, both deterministic:
+
+- **stale** — the recorded command doesn't match the rules reins ships *today*. That denial wasn't a judgement call that went the wrong way; it's damage from a rule already fixed upstream, and it means `reins policy upgrade` has real work to do.
+- **worked around** — a near-identical call ran later in the same session. The same containment measure live bypass reporting uses, so the two can never disagree.
+
+It reads the capture DB, which the live bypass ledger can't: that ledger is cleared at the end of each run, so cross-project history only ever existed here. Verdicts are computed from what capture stored — whitespace collapsed, long commands truncated — which can only make a rule look *more* likely to fire, so "stale" is under-claimed rather than over-claimed, and truncated rows are marked as such in the output.
+
 ### `reins scan` — rules aimed at *your* repo
 
 The default denylist is the same everywhere, which means it's aimed at no one in particular. `reins scan` reads your manifests (`package.json`, `prisma/`, `supabase/`, `alembic.ini`, `*.tf`, `k8s/`, `.env`) and proposes rules for what *this* repo can actually destroy.
@@ -284,6 +308,8 @@ reins policy upgrade --apply   # apply it
 ```
 
 Shipped rules carry an `origin` so they can be refreshed while your own rules are left alone; `reins doctor` tells you when yours are stale. Your deliberate edits survive — if you downgraded a rule to `ask` or gave it an `expires`, an upgrade keeps that.
+
+Staleness is read off each **rule**, not off the file. That distinction cost a real install seven weeks: writing the policy file used to stamp it with the *current* generation even when it had never carried one, so a repo could sit at "v2" while enforcing June's rule bodies — and the upgrade, seeing a current version, filed every stale rule under "you customized this" and refused to touch it, permanently. A rule that can't say which generation wrote it is now treated as stale and refreshed. If a shipped rule's pattern is genuinely *yours*, mark it `"origin": "user"` and nothing will ever touch it again.
 
 ---
 
@@ -464,6 +490,8 @@ reins pending                    List actions parked by hold rules
 reins approve <id>               Approve a parked action (one-shot, exact call)
 reins deny <id> [--steer "..."]  Refuse a parked action, optionally steer instead
 reins audit [session] [--json]   Every gate decision (deny/ask/hold/allow/breach/bypass)
+reins audit --guards [--json]    Were the guards right? Every denial ever recorded,
+                                 scored: stale rules, and vetoes worked around anyway
 reins lastrun [session]          Readable account of a run (id prefix or name)
 reins sessions [-n N]            List recent sessions (with names)
 reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one

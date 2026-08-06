@@ -233,10 +233,16 @@ export function saveGuards(guards: GuardsFile, payloadCwd?: string): void {
   // one-time migration: policy.json now exists alongside it, and guards.json
   // is left in place untouched — it's the user's file, never delete it out
   // from under them.
-  // Stamp the generation on every write so a file created today can be told
-  // apart from one created before a rule fix shipped. A file with no version
-  // is treated as pre-0.4 and upgraded by matching rule ids instead.
-  const out: GuardsFile = { ...guards, version: guards.version ?? POLICY_VERSION };
+  // Write the version the caller actually has, and invent nothing. Stamping an
+  // unversioned file with the CURRENT generation — which this used to do — is
+  // how a stale install becomes a permanently stale one: a `reins guard add` on
+  // a pre-0.4 policy.json rewrote it as "v2" while its rule bodies stayed at
+  // June's, and `policy upgrade` then read the version, concluded nothing new
+  // had shipped, and treated every stale rule as the user's own customization.
+  // Measured in a real repo: a `rm-rf` rule with no exemptions, stamped current
+  // and frozen there, denying `rm -rf .next` fourteen times. A file with no
+  // version stays unversioned; upgrade handles it by matching rule ids.
+  const out: GuardsFile = { ...guards };
   fs.writeFileSync(policyPath(payloadCwd), JSON.stringify(out, null, 2) + "\n");
 }
 
