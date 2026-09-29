@@ -3,7 +3,7 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-09-29
 
 ### Added
 
@@ -27,6 +27,16 @@ All notable changes to `reins` are documented here. Format loosely follows
   second terminal; it reaches every install by updating the package. The Stop
   summary already reported actions still parked at the end of a run, and still
   does — this is the same fact, delivered when it can still be acted on.
+- **`reins audit --guards [--json]`** looks back over every denial the project
+  ever recorded and gives each one two deterministic verdicts. *Stale*: the
+  rules reins ships today would not have denied it, so it came from a rule
+  that has since been fixed. *Worked around*: a near-identical call ran later
+  in the same session. It reads both the `decisions` table and the older
+  tagged `tool_calls` rows, so projects captured before 0.4 get their full
+  history. Capture stores commands whitespace-collapsed and truncated, which
+  can only make a rule look more likely to fire, so staleness is
+  under-counted rather than over-counted, and truncated rows are marked. On
+  the repo it was built against: 18 denials, 15 stale, 5 worked around.
 
 ### Changed
 
@@ -52,6 +62,23 @@ All notable changes to `reins` are documented here. Format loosely follows
 - **Pre-0.4 approvals in `.reins/allowed/` are no longer honored.** They were
   keyed by the bare input hash, so any session in any directory could spend
   one. An approval stranded by this re-parks and is asked again.
+- **A stale policy file could be stamped as current, freezing its rules.** A
+  `policy.json` with no `version` was written back with the current version
+  by any `guard add`, `guard remove` or `scan --accept`, while its rule bodies
+  stayed old. `policy upgrade` then read that stamp and treated every stale
+  rule as a user customization, permanently. In one real repo this kept an
+  old `rm-rf` rule without its exemptions, denying `rm -rf .next` fourteen
+  times over seven weeks after the fix shipped. Saving now never writes a
+  version the file didn't have, and the upgrade reads staleness off each
+  rule's `origin` rather than the file's `version`. A rule with no origin is
+  refreshed (still diff-first, `--apply` only), and the upgrade tells you to
+  mark it `"origin": "user"` if you want to keep it. `doctor` no longer
+  reports such a file as current.
+- **Bypass detection no longer reports a different command as a workaround.**
+  Matching ignored flags, so a denied `git push --force-with-lease origin
+  feat/x` looked 86% identical to a later `git fetch origin feat/x`. The
+  action words now have to match too, in both the live check and
+  `audit --guards`.
 - **Your own guard rules stopped applying once the agent `cd`'d into a
   subdirectory.** Read that as a security fix, not a papercut. The hooks took
   the event's `cwd` verbatim as the project root, but Claude Code reports the
