@@ -28,8 +28,30 @@ All notable changes to `reins` are documented here. Format loosely follows
   summary already reported actions still parked at the end of a run, and still
   does — this is the same fact, delivered when it can still be acted on.
 
+### Changed
+
+- **Holds use deny-and-queue by default; defer is opt-in.** `holdTransport`
+  now defaults to `"deny"` instead of `"auto"`. `auto` confirmed print mode
+  before choosing defer, but Claude Code also drops defer when the model makes
+  several tool calls in one message, and a hook can't see that. The held
+  action then ran, and reins could only report a HOLD BREACH afterwards. That
+  is too late for a deploy or a publish. Set `"holdTransport": "auto"` in
+  `.reins/config.json` to get the previous behavior. An unrecognized value now
+  means `deny`.
+
 ### Fixed
 
+- **An approval could be spent in a different directory.** A deny-transport
+  approval was keyed to the session and the exact input, but not to where the
+  agent was standing. `./deploy.sh` held and approved in `staging/` would then
+  run in `prod/` in the same session. Parked actions now record their working
+  directory (symlinks resolved), the approval key includes it, and `reins
+  pending` shows it whenever it isn't the project root. Approvals filed before
+  this change, and still waiting, no longer match: the agent's retry parks
+  again and needs a fresh `reins approve`.
+- **Pre-0.4 approvals in `.reins/allowed/` are no longer honored.** They were
+  keyed by the bare input hash, so any session in any directory could spend
+  one. An approval stranded by this re-parks and is asked again.
 - **Your own guard rules stopped applying once the agent `cd`'d into a
   subdirectory.** Read that as a security fix, not a papercut. The hooks took
   the event's `cwd` verbatim as the project root, but Claude Code reports the

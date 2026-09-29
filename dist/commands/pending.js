@@ -1,8 +1,43 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdPending = cmdPending;
 exports.cmdApprove = cmdApprove;
 exports.cmdDeny = cmdDeny;
+const path = __importStar(require("node:path"));
+const paths_1 = require("../paths");
 const holds_1 = require("../holds");
 const steering_1 = require("../steering");
 const util_1 = require("../util");
@@ -30,6 +65,11 @@ function cmdPending() {
         console.log(`  ${format_1.c.cyan(p.id)}  ${format_1.c.dim(age(p.ts).padEnd(8))} ${format_1.c.dim(shortId(p.session_id).padEnd(9))}` +
             ` ${p.tool.padEnd(8)} ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}` +
             ` ${format_1.c.dim(`[${p.rule_id}]`)}${mark}`);
+        // The directory is part of what gets approved, so the approver sees it
+        // whenever it isn't simply the project root.
+        const where = workdirLabel(p.cwd);
+        if (where)
+            console.log(`            ${format_1.c.dim("in " + where)}`);
     }
     console.log("");
     console.log(format_1.c.dim("Approve one: ") +
@@ -41,6 +81,18 @@ function cmdPending() {
             `    replayed on resume. Approving it takes effect only if the agent proposes it again.`));
     }
     return 0;
+}
+/** Where a proposal was made, relative to the project when it is inside it.
+ *  Empty for the project root itself, and for entries that predate the field. */
+function workdirLabel(cwd) {
+    if (!cwd)
+        return "";
+    const rel = path.relative((0, holds_1.proposalWorkdir)((0, paths_1.resolveProjectDir)()), cwd);
+    if (rel === "")
+        return "";
+    if (rel.startsWith("..") || path.isAbsolute(rel))
+        return cwd;
+    return rel + path.sep;
 }
 /**
  * Ids of deferred holds that a later deferred hold in the same session has
@@ -88,7 +140,7 @@ function cmdApprove(args) {
     // best-effort here; the filed decision is the gate.
     try {
         (0, steering_1.appendSteering)(`Your parked action ${found.id} (${found.tool}: ${(0, util_1.truncate)(summary, 120)}) is approved — ` +
-            `retry that exact call now, then continue.`, undefined, found.session_id);
+            `retry that exact call now, from the same working directory, then continue.`, undefined, found.session_id);
     }
     catch {
         /* session steering is a courtesy; the decision is what matters */

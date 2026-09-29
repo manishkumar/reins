@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.proposalWorkdir = proposalWorkdir;
 exports.parkAction = parkAction;
 exports.listPending = listPending;
 exports.pendingForSession = pendingForSession;
@@ -57,10 +58,22 @@ function pendingDir(payloadCwd) {
 function decidedDir(payloadCwd) {
     return path.join((0, paths_1.reinsDir)(payloadCwd), "decided");
 }
-/** Pre-0.4 one-shot approvals: .reins/allowed/<input_hash>.json. Still read, so
- *  upgrading reins mid-run never strands an approval the human already gave. */
-function legacyAllowedDir(payloadCwd) {
-    return path.join((0, paths_1.reinsDir)(payloadCwd), "allowed");
+/**
+ * The working directory a proposal is bound to, in one canonical spelling:
+ * symlinks resolved, so the binding is to the directory actually in use. A
+ * `current -> releases/5` link flipped to `releases/6` after approval is a
+ * different action, and re-parks. No cwd in the event binds to "" — a real
+ * Claude Code event always carries one.
+ */
+function proposalWorkdir(payloadCwd) {
+    if (!payloadCwd || !payloadCwd.trim())
+        return "";
+    try {
+        return fs.realpathSync(payloadCwd);
+    }
+    catch {
+        return path.resolve(payloadCwd);
+    }
 }
 /** 0700 like .reins itself: a pending action's input can contain secrets. */
 function ensureDir(dir, payloadCwd) {
@@ -69,7 +82,8 @@ function ensureDir(dir, payloadCwd) {
 }
 /**
  * Park a proposed action. If this session already has the identical proposal
- * parked (same input hash), return the existing entry instead of duplicating —
+ * parked (same input hash, same directory), return the existing entry instead
+ * of duplicating —
  * an agent retrying a held call is asking about the same decision, not filing
  * a new one.
  */
@@ -79,7 +93,7 @@ function parkAction(payloadCwd, action) {
         // other retry is recognized by its form.
         (action.tool_use_id && p.tool_use_id
             ? p.tool_use_id === action.tool_use_id
-            : p.input_hash === action.input_hash));
+            : p.input_hash === action.input_hash && (p.cwd ?? "") === (action.cwd ?? "")));
     if (existing)
         return { id: existing.id, existed: true };
     const id = crypto.randomBytes(4).toString("hex");
@@ -134,12 +148,17 @@ function removePending(payloadCwd, id) {
  * is keyed to that one call and nothing else can spend it. A denied-and-retried
  * call gets a fresh tool_use_id, so it can only be recognized by its form: the
  * exact input hash, scoped to the session that proposed it (an unscoped hash
- * key let a second session consume the first's approval).
+ * key let a second session consume the first's approval) and to the directory
+ * it was proposed from (without it, `./deploy.sh` approved in staging/ ran in
+ * prod/).
  */
 function decisionKey(d) {
     if (d.transport === "defer" && d.tool_use_id)
         return "u-" + d.tool_use_id;
-    return "h-" + shortHash(d.session_id) + "-" + d.input_hash;
+    return formKey(d.session_id, d.cwd, d.input_hash);
+}
+function formKey(sessionId, cwd, inputHash) {
+    return "h-" + shortHash(sessionId) + "-" + shortHash(cwd ?? "") + "-" + inputHash;
 }
 function shortHash(s) {
     return crypto.createHash("sha256").update(s).digest("hex").slice(0, 8);
@@ -152,6 +171,7 @@ function writeDecision(payloadCwd, action, resolution, steer) {
         session_id: action.session_id,
         tool: action.tool,
         input_hash: action.input_hash,
+        cwd: action.cwd,
         tool_use_id: action.tool_use_id,
         transport: action.transport,
         rule_id: action.rule_id,
@@ -167,33 +187,24 @@ function writeDecision(payloadCwd, action, resolution, steer) {
  * identical call can't both spend a one-shot answer.
  *
  * Tried in order: this exact deferred call (tool_use_id), then this session's
- * identical proposal (hash), then a pre-0.4 unscoped allowance. First match
- * wins and is consumed.
+ * identical proposal from this directory (hash). First match wins and is
+ * consumed.
+ *
+ * Pre-0.4 approvals in `.reins/allowed/<input_hash>.json` are no longer read.
+ * They were keyed by the bare hash, so any session in any directory could
+ * spend one. An approval stranded by that is a re-park the human answers again,
+ * which is the direction a gate should fail.
  */
 function consumeDecision(payloadCwd, attempt) {
     const candidates = [];
     if (attempt.tool_use_id) {
         candidates.push(path.join(decidedDir(payloadCwd), "u-" + attempt.tool_use_id + ".json"));
     }
-    candidates.push(path.join(decidedDir(payloadCwd), "h-" + shortHash(attempt.session_id) + "-" + attempt.input_hash + ".json"));
+    candidates.push(path.join(decidedDir(payloadCwd), formKey(attempt.session_id, attempt.cwd, attempt.input_hash) + ".json"));
     for (const p of candidates) {
         const taken = takeJson(p);
         if (taken)
             return taken;
-    }
-    // Legacy: a one-shot approval written by reins < 0.4, keyed by bare hash.
-    const legacy = takeJson(path.join(legacyAllowedDir(payloadCwd), attempt.input_hash + ".json"));
-    if (legacy) {
-        return {
-            action_id: legacy.action_id,
-            session_id: legacy.session_id,
-            tool: legacy.tool,
-            input_hash: attempt.input_hash,
-            transport: "deny",
-            rule_id: legacy.rule_id,
-            resolution: "approved",
-            decided_ts: new Date().toISOString(),
-        };
     }
     return null;
 }

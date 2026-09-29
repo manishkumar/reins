@@ -178,6 +178,47 @@ test("approve: a CHANGED retry is a new proposal, not pre-approved", () => {
   assert.match(changed.hookSpecificOutput.permissionDecisionReason, /parked for approval/);
 });
 
+// The same text is a different action in a different directory. An approval
+// for `./deploy.sh` in staging/ must not let `./deploy.sh` run in prod/.
+test("approve: an approval is bound to the directory it was proposed from", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [
+    { id: "deploy-hold", type: "bash", pattern: "deploy\\.sh", reason: "Deploys need approval.", action: "hold" },
+  ]);
+  for (const env of ["staging", "prod"]) fs.mkdirSync(path.join(dir, env));
+  const deployFrom = (sub) => ({
+    cwd: path.join(dir, sub),
+    session_id: "h1",
+    tool_name: "Bash",
+    tool_input: { command: "./deploy.sh" },
+  });
+
+  runHook("pre-tool", deployFrom("staging"), dir);
+  const id = listPendingFiles(dir)[0].replace(".json", "");
+  // The approver sees where the action would run.
+  assert.match(runCli(["pending"], dir), new RegExp("in staging\\" + path.sep));
+  runCli(["approve", id], dir);
+
+  // Same session, same command, other directory: a new proposal.
+  const prod = JSON.parse(runHook("pre-tool", deployFrom("prod"), dir));
+  assert.strictEqual(prod.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(prod.hookSpecificOutput.permissionDecisionReason, /parked for approval/);
+  assert.doesNotMatch(prod.hookSpecificOutput.permissionDecisionReason, new RegExp(id));
+
+  // The approval was not spent by the prod attempt; staging still gets it.
+  const staging = JSON.parse(runHook("pre-tool", deployFrom("staging"), dir));
+  assert.strictEqual(staging.hookSpecificOutput.permissionDecision, "allow");
+});
+
+test("pre-tool: the same command parked from two directories is two queue entries", () => {
+  const dir = tmpProject();
+  writeGuards(dir, [HOLD_RULE]);
+  fs.mkdirSync(path.join(dir, "a"));
+  runHook("pre-tool", PUSH_EVENT(dir), dir);
+  runHook("pre-tool", { ...PUSH_EVENT(dir), cwd: path.join(dir, "a") }, dir);
+  assert.strictEqual(listPendingFiles(dir).length, 2);
+});
+
 test("approve: id prefix works; unknown and ambiguous ids fail with exit 1", () => {
   const dir = tmpProject();
   writeGuards(dir, [HOLD_RULE]);

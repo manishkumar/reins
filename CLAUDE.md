@@ -49,18 +49,20 @@ will never see. That is the frame for everything below.
 
 7. **Approvals are one-shot and bound to one proposal.** A deferred hold is bound to the
    exact call (`tool_use_id`, replayed by Claude Code on resume); a denied hold is bound
-   to the identical input, scoped to the session that proposed it. Either way `reins
-   approve` clears *one* call, once. Widening this — prefix matching, per-rule blanket
-   allows, TTLs, unscoped hash keys — is a security regression dressed as a UX
-   improvement. Don't.
+   to the identical input, scoped to the session that proposed it and to the working
+   directory it was proposed from (the same text in another directory is another
+   action). Either way `reins approve` clears *one* call, once. Widening this — prefix
+   matching, per-rule blanket allows, TTLs, unscoped hash keys, dropping the directory —
+   is a security regression dressed as a UX improvement. Don't.
 
 8. **A hold must actually hold, or say it didn't.** `defer` is the better transport (the
    real call is preserved and replayed, so approval doesn't depend on the agent
    reconstructing it) but Claude Code honors it *only in print mode* and *only for a solo
-   tool call*, and ignores it silently otherwise. So `src/defer.ts` demands **positive
-   evidence** of print mode — it reads the argv of the Claude Code process itself
-   (`CLAUDE_PID`), the same input Claude Code judged itself by — and answers "no"
-   otherwise, falling back to the deny transport that works everywhere. Do not swap that
+   tool call*, and ignores it silently otherwise. The solo-call condition is invisible to
+   a hook, so **deny is the default transport and defer is opt-in** (`holdTransport:
+   "auto"`). Under `auto`, `src/defer.ts` demands **positive evidence** of print mode — it
+   reads the argv of the Claude Code process itself (`CLAUDE_PID`), the same input Claude
+   Code judged itself by — and answers "no" otherwise. Do not swap that
    for a cheaper proxy: `CLAUDE_CODE_ENTRYPOINT` was tried and is wrong in both
    directions (a real `-p` run can report `claude-vscode`; an interactive session can
    inherit `sdk-cli`). PostToolUse independently reports any parked action that executed
