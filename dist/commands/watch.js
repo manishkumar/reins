@@ -34,107 +34,156 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdWatch = cmdWatch;
-exports.buildModel = buildModel;
-exports.renderFrame = renderFrame;
 const readline = __importStar(require("node:readline"));
+const path = __importStar(require("node:path"));
 const db_1 = require("../db");
-const names_1 = require("../names");
-const store_1 = require("../store");
 const config_1 = require("../config");
 const paths_1 = require("../paths");
 const steering_1 = require("../steering");
-const format_1 = require("./format");
-const util_1 = require("../util");
-const path = __importStar(require("node:path"));
+const holdActions_1 = require("../holdActions");
+const model_1 = require("../tui/model");
+const term_1 = require("../tui/term");
+const render_1 = require("../tui/render");
 /**
- * `reins watch` — mission control for a fleet of agents in one repo.
+ * `reins watch` — the cockpit. Every agent in the repo, everything waiting on
+ * you, and the controls to answer it: approve or deny a held action, steer one
+ * agent or all of them.
  *
- * A live, auto-refreshing cockpit over the same `.reins/runs.db` the other read
- * commands use. Each agent is its own block — status (active / idle / looping
- * now), a short trajectory tail (its last few tool calls), and any queued
- * steering — separated from the next agent by a rule. Plus the one thing a
- * built-in queued message can't do: aim a nudge at ONE of N agents without
- * alt-tabbing into its window. Select a session, press `s`, type.
+ * Approving here is the same act as `reins approve`, through the same code
+ * (src/holdActions.ts), with two extra guards a keypress needs and a typed
+ * command doesn't: the dialog shows the full input and stays locked until it
+ * has been scrolled through, and the action is re-read at the moment of `y`
+ * so a stale screen can't approve something nobody reviewed.
  *
- * Dependency-free on purpose (raw ANSI + node:readline) — no daemon, no TUI lib,
- * in keeping with the rest of reins. The renderer (`renderFrame`) is a pure
- * function of an immutable model so it can be unit-tested without a terminal.
+ * Nothing listens on a port. The only way in is the keyboard of the person
+ * who started it, which is the reason approving lives here and not in the
+ * HTML report.
  */
-const ALT_ON = "\x1b[?1049h";
-const ALT_OFF = "\x1b[?1049l";
-const HIDE_CURSOR = "\x1b[?25l";
-const SHOW_CURSOR = "\x1b[?25h";
-const HOME = "\x1b[H";
-const CLEAR = "\x1b[2J";
-/** Activity newer than this counts as "active"; older running sessions are "idle". */
-const ACTIVE_WINDOW_MS = 30_000;
-const DEFAULT_LIMIT = 12;
-/** How many recent tool calls to show under each session block. */
-const RECENT_CALLS = 3;
+const ESC = "\x1b[";
+const ALT_ON = `${ESC}?1049h`;
+const ALT_OFF = `${ESC}?1049l`;
+const HIDE_CURSOR = `${ESC}?25l`;
+const SHOW_CURSOR = `${ESC}?25h`;
+const WRAP_OFF = `${ESC}?7l`;
+const WRAP_ON = `${ESC}?7h`;
+const TITLE_PUSH = `${ESC}22;0t`;
+const TITLE_POP = `${ESC}23;0t`;
+const TOAST_MS = 6000;
+const FLASH_MS = 4000;
 async function cmdWatch(args) {
     const intervalSec = parseInterval(args) ?? 2;
     const once = args.includes("--once");
-    const db = (0, db_1.openDbReadOnly)();
-    if (!db) {
-        console.log(format_1.c.dim((0, store_1.capabilityNote)() || "Nothing to watch yet — no .reins/runs.db. Run an agent first."));
-        return 0;
-    }
-    const threshold = (0, config_1.loadConfig)().loopThreshold;
+    const quiet = args.includes("--quiet");
     const repo = (0, paths_1.resolveProjectDir)();
+    const threshold = (0, config_1.loadConfig)().loopThreshold;
     const interactive = !!(process.stdin.isTTY && process.stdout.isTTY) && !once;
-    // Non-TTY (piped, CI, or --once): print one snapshot and exit. Keeps `watch`
-    // scriptable and prevents a detached process from spinning forever.
     if (!interactive) {
-        const model = buildModel(db, repo, threshold);
-        const ui = {
-            selectedId: model.sessions[0]?.id ?? null,
-            nowMs: Date.now(),
-            intervalSec,
-            message: "",
-            width: process.stdout.columns || 100,
-        };
-        process.stdout.write(renderFrame(model, ui, false) + "\n");
+        // Piped, CI, or --once: one snapshot and exit, so a detached process never spins.
+        const st = new term_1.Style((0, term_1.detectColorMode)(!!process.stdout.isTTY));
+        const model = (0, model_1.buildWatchModel)((0, db_1.openDbReadOnly)(), repo, threshold);
+        process.stdout.write((0, render_1.renderSnapshot)(model, st, process.stdout.columns || 100) + "\n");
         return 0;
     }
-    return runInteractive(db, repo, threshold, intervalSec);
+    return runCockpit(repo, threshold, intervalSec, quiet);
 }
-function runInteractive(db, repo, threshold, intervalSec) {
+function runCockpit(repo, threshold, intervalSec, quiet) {
     return new Promise((resolve) => {
-        let selectedId = null;
-        let message = "";
-        let prompting = false;
+        const out = process.stdout;
+        const stdin = process.stdin;
+        const st = new term_1.Style((0, term_1.detectColorMode)(true));
+        let db = (0, db_1.openDbReadOnly)();
+        let model = (0, model_1.buildWatchModel)(db, repo, threshold);
+        const ui = {
+            width: out.columns || 100,
+            height: out.rows || 30,
+            cursor: 0,
+            zoom: false,
+            detailScroll: 0,
+            modal: null,
+            toast: null,
+            flashUntil: 0,
+            intervalSec,
+        };
+        let toastAt = 0;
+        let anchor = (0, render_1.selectedRow)(model, ui);
+        let knownHolds = new Set(model.holds.map((h) => h.action.id));
+        let prevFrame = [];
         let timer = null;
         let closed = false;
-        const stdin = process.stdin;
-        function render() {
-            if (prompting || closed)
+        /* ------------------------------------------------------------ data */
+        function focusAgentId() {
+            const row = (0, render_1.selectedRow)(model, ui);
+            return row?.kind === "agent" ? row.id : null;
+        }
+        function refresh() {
+            // runs.db may appear after the cockpit started (first run in a new repo).
+            if (!db)
+                db = (0, db_1.openDbReadOnly)();
+            model = (0, model_1.buildWatchModel)(db, repo, threshold, { focusId: focusAgentId() });
+            reanchor();
+            const ids = new Set(model.holds.map((h) => h.action.id));
+            const fresh = [...ids].filter((id) => !knownHolds.has(id));
+            knownHolds = ids;
+            if (fresh.length)
+                announce(fresh);
+            setTitle();
+        }
+        /** Keep the cursor on the same item across refreshes; clamp if it went away. */
+        function reanchor() {
+            const rows = (0, render_1.listRows)(model);
+            const i = anchor ? rows.findIndex((r) => (0, render_1.sameRow)(r, anchor)) : -1;
+            ui.cursor = i >= 0 ? i : Math.max(0, Math.min(ui.cursor, rows.length - 1));
+            anchor = rows[ui.cursor] ?? null;
+        }
+        /**
+         * A new hold arrived. Flash the header, ring the bell, and post a desktop
+         * notification where the terminal supports one. The selection does NOT
+         * move: a list that shifts under the cursor is how the wrong thing gets
+         * approved.
+         */
+        function announce(ids) {
+            ui.flashUntil = Date.now() + FLASH_MS;
+            const h = (0, render_1.findHold)(model, ids[0]);
+            const what = h ? `${h.action.tool}: ${(0, term_1.clean)(h.input).replace(/\s+/g, " ").slice(0, 80)}` : ids[0];
+            toast(`◆ new hold ${ids[0]} — ${what}`, "warn");
+            if (quiet)
                 return;
-            const model = buildModel(db, repo, threshold);
-            // Keep the selection anchored to a session id across reorders; fall back to
-            // the top row if the previously selected session scrolled off the list.
-            if (!selectedId || !model.sessions.some((s) => s.id === selectedId)) {
-                selectedId = model.sessions[0]?.id ?? null;
+            out.write("\x07");
+            if (supportsOsc9())
+                out.write(`\x1b]9;reins: ${ids.length === 1 ? "an action is" : `${ids.length} actions are`} waiting for approval\x07`);
+        }
+        function setTitle() {
+            const n = model.holds.length + model.events.length;
+            const name = (0, term_1.clean)(path.basename(repo)).replace(/[\x07\x1b]/g, "");
+            out.write(`\x1b]2;${n ? `◆ ${n} · ` : ""}reins watch · ${name}\x07`);
+        }
+        function toast(text, tone) {
+            ui.toast = { text, tone };
+            toastAt = Date.now();
+        }
+        /* ---------------------------------------------------------- output */
+        function draw() {
+            if (closed)
+                return;
+            ui.width = out.columns || ui.width;
+            ui.height = out.rows || ui.height;
+            if (ui.toast && Date.now() - toastAt > TOAST_MS)
+                ui.toast = null;
+            model.nowMs = Date.now();
+            const frame = (0, render_1.renderScreen)(model, ui, st);
+            let buf = "";
+            for (let i = 0; i < frame.length; i++) {
+                if (frame[i] !== prevFrame[i])
+                    buf += `${ESC}${i + 1};1H${ESC}0m${frame[i]}${ESC}0m`;
             }
-            const ui = {
-                selectedId,
-                nowMs: Date.now(),
-                intervalSec,
-                message,
-                width: process.stdout.columns || 100,
-            };
-            process.stdout.write(HOME + CLEAR + renderFrame(model, ui, true));
+            prevFrame = frame;
+            if (buf)
+                out.write(buf);
         }
-        function currentSessions() {
-            return buildModel(db, repo, threshold).sessions;
-        }
-        function move(delta) {
-            const ids = currentSessions().map((s) => s.id);
-            if (ids.length === 0)
-                return;
-            const cur = selectedId ? ids.indexOf(selectedId) : -1;
-            const next = Math.max(0, Math.min(ids.length - 1, (cur < 0 ? 0 : cur) + delta));
-            selectedId = ids[next];
-            render();
+        function tick() {
+            if (ui.modal?.kind !== "deny" && ui.modal?.kind !== "steer")
+                refresh();
+            draw();
         }
         function cleanup() {
             if (closed)
@@ -142,7 +191,8 @@ function runInteractive(db, repo, threshold, intervalSec) {
             closed = true;
             if (timer)
                 clearInterval(timer);
-            stdin.off("keypress", onKeypress);
+            stdin.off("keypress", onKey);
+            out.off("resize", onResize);
             try {
                 stdin.setRawMode?.(false);
             }
@@ -150,83 +200,259 @@ function runInteractive(db, repo, threshold, intervalSec) {
                 /* not a raw-capable tty */
             }
             stdin.pause();
-            process.stdout.write(SHOW_CURSOR + ALT_OFF);
+            out.write(`${ESC}0m` + WRAP_ON + SHOW_CURSOR + ALT_OFF + TITLE_POP);
         }
-        async function steer(target) {
-            const sess = currentSessions();
-            const sel = sess.find((s) => s.id === selectedId);
-            if (target === "selected" && !sel) {
-                message = format_1.c.yellow("no session selected");
-                render();
-                return;
-            }
-            const who = target === "broadcast"
-                ? "all sessions (broadcast)"
-                : `${format_1.c.cyan(sel.name ?? shortId(sel.id))} ${format_1.c.dim("(" + shortId(sel.id) + ")")}`;
-            prompting = true;
-            const answer = (await promptLine(`steer ${who} › `)).trim();
-            prompting = false;
-            if (answer) {
-                (0, steering_1.writeSteering)(answer, undefined, target === "broadcast" ? undefined : sel.id);
-                message =
-                    format_1.c.green("✓ queued") +
-                        (target === "broadcast" ? " broadcast" : ` → ${shortId(sel.id)}`) +
-                        format_1.c.dim(" (lands at its next tool call)");
-            }
-            else {
-                message = format_1.c.dim("steer cancelled");
-            }
-            render();
+        function quit() {
+            cleanup();
+            resolve(0);
         }
-        function clearSelected() {
-            const sel = currentSessions().find((s) => s.id === selectedId);
-            if (!sel)
-                return;
-            (0, steering_1.clearSteering)(undefined, sel.id);
-            message = format_1.c.dim(`cleared queued steering for ${shortId(sel.id)}`);
-            render();
+        function onResize() {
+            prevFrame = [];
+            out.write(`${ESC}2J`);
+            draw();
         }
-        function onKeypress(str, key) {
-            if (prompting)
+        /* --------------------------------------------------------- actions */
+        function move(to) {
+            const rows = (0, render_1.listRows)(model);
+            if (!rows.length)
                 return;
-            if (key && key.ctrl && key.name === "c") {
-                cleanup();
-                resolve(0);
+            ui.cursor = Math.max(0, Math.min(rows.length - 1, to));
+            anchor = rows[ui.cursor];
+            ui.detailScroll = 0;
+            // The detail pane shows a deep trajectory only for the focused agent.
+            if (anchor.kind === "agent")
+                model = (0, model_1.buildWatchModel)(db, repo, threshold, { focusId: anchor.id });
+        }
+        function jumpSection(dir) {
+            const rows = (0, render_1.listRows)(model);
+            if (!rows.length)
+                return;
+            const kind = rows[ui.cursor]?.kind;
+            const starts = rows.map((r, i) => (i === 0 || rows[i - 1].kind !== r.kind ? i : -1)).filter((i) => i >= 0);
+            const cur = starts.filter((i) => rows[i].kind === kind)[0] ?? 0;
+            const idx = starts.indexOf(cur);
+            move(starts[(idx + dir + starts.length) % starts.length]);
+        }
+        function openFor(kind) {
+            const row = (0, render_1.selectedRow)(model, ui);
+            if (row?.kind !== "hold") {
+                toast(`select a held action (◆) under NEEDS YOU to ${kind} it`, "muted");
                 return;
             }
+            ui.modal = kind === "approve" ? { kind, holdId: row.id, scroll: 0 } : { kind, holdId: row.id, text: "" };
+        }
+        function decide(kind, holdId, text = "") {
+            const reviewed = (0, render_1.findHold)(model, holdId);
+            ui.modal = null;
+            if (!reviewed) {
+                toast(`${holdId} is no longer pending`, "muted");
+                return;
+            }
+            const check = (0, holdActions_1.reloadForDecision)(holdId, reviewed.action);
+            if (!check.ok) {
+                toast(check.reason === "gone"
+                    ? `${holdId} was already resolved elsewhere — nothing changed`
+                    : `${holdId} changed since you opened it — nothing approved; review it again`, "warn");
+                refresh();
+                return;
+            }
+            try {
+                if (kind === "approve") {
+                    const r = (0, holdActions_1.approveHold)(check.action, "human-tui");
+                    if (r.resume) {
+                        ui.modal = {
+                            kind: "result",
+                            title: "APPROVED",
+                            tone: "good",
+                            lines: [
+                                st.fg("good", st.bold(`✓ ${r.id} approved, once.`)),
+                                "",
+                                "The original call is parked inside the session. Nothing runs until it resumes:",
+                                "",
+                                st.fg("accent", r.resume),
+                            ],
+                        };
+                    }
+                    else {
+                        toast(`✓ approved ${r.id} once · the session was steered to retry that exact call`, "good");
+                    }
+                }
+                else {
+                    const r = (0, holdActions_1.denyHold)(check.action, text, "human-tui");
+                    toast(`✗ refused ${r.id}` + (r.steered ? " · steered the session to your alternative" : ""), "bad");
+                }
+            }
+            catch (e) {
+                toast(`could not ${kind} ${holdId}: ${String(e)}`, "bad");
+            }
+            refresh();
+        }
+        function submitSteer(target, text) {
+            ui.modal = null;
+            const msg = text.trim();
+            if (!msg) {
+                toast("steer cancelled", "muted");
+                return;
+            }
+            try {
+                (0, steering_1.appendSteering)(msg, undefined, target ?? undefined);
+                toast(target ? `✎ queued for ${target.slice(0, 8)} · lands at its next tool call` : "✎ broadcast queued · the next agent to move gets it", "violet");
+            }
+            catch (e) {
+                toast(`could not queue steering: ${String(e)}`, "bad");
+            }
+            refresh();
+        }
+        /* ------------------------------------------------------------ keys */
+        function onKey(str, key) {
+            if (key?.ctrl && key.name === "c")
+                return quit();
+            const md = ui.modal;
+            if (md)
+                onModalKey(md, str, key);
+            else
+                onMainKey(str, key);
+            draw();
+        }
+        function onMainKey(str, key) {
             const name = key?.name;
-            switch (str || name) {
+            const rows = (0, render_1.listRows)(model);
+            const half = Math.max(3, Math.floor(ui.height / 2));
+            if (key?.ctrl && name === "d")
+                return void (ui.detailScroll += half);
+            if (key?.ctrl && name === "u")
+                return void (ui.detailScroll = Math.max(0, ui.detailScroll - half));
+            if (name === "tab")
+                return jumpSection(key.shift ? -1 : 1);
+            switch (str === "J" || str === "K" || str === "G" ? str : name ?? str) {
                 case "q":
-                    cleanup();
-                    resolve(0);
-                    return;
-                case "k":
+                    return quit();
                 case "up":
-                    move(-1);
-                    return;
-                case "j":
+                case "k":
+                    return move(ui.cursor - 1);
                 case "down":
-                    move(1);
+                case "j":
+                    return move(ui.cursor + 1);
+                case "home":
+                case "g":
+                    return move(0);
+                case "end":
+                case "G":
+                    return move(rows.length - 1);
+                case "J":
+                case "pagedown":
+                    ui.detailScroll += half;
                     return;
-                case "s":
-                    void steer("selected");
+                case "K":
+                case "pageup":
+                    ui.detailScroll = Math.max(0, ui.detailScroll - half);
                     return;
+                case "return":
+                    ui.zoom = !ui.zoom;
+                    ui.detailScroll = 0;
+                    return;
+                case "escape":
+                    ui.zoom = false;
+                    ui.toast = null;
+                    return;
+                case "a":
+                    return openFor("approve");
+                case "d":
+                    return openFor("deny");
+                case "s": {
+                    const target = (0, render_1.steerTarget)(model, (0, render_1.selectedRow)(model, ui));
+                    if (!target)
+                        return toast("select an agent to steer, or press b to broadcast", "muted");
+                    ui.modal = { kind: "steer", target, text: "" };
+                    return;
+                }
                 case "b":
-                    void steer("broadcast");
+                    ui.modal = { kind: "steer", target: null, text: "" };
                     return;
-                case "c":
-                    clearSelected();
-                    return;
+                case "c": {
+                    const row = (0, render_1.selectedRow)(model, ui);
+                    if (row?.kind !== "agent")
+                        return;
+                    (0, steering_1.clearSteering)(undefined, row.id);
+                    toast(`cleared queued steering for ${row.id.slice(0, 8)}`, "muted");
+                    return refresh();
+                }
                 case "r":
-                    message = "";
-                    render();
-                    return;
+                    toast("refreshed", "muted");
+                    return refresh();
                 default:
-                    return;
+                    if (str === "?")
+                        ui.modal = { kind: "help" };
             }
         }
-        // Enter the alternate screen so we don't shred the user's scrollback.
-        process.stdout.write(ALT_ON + HIDE_CURSOR);
+        function onModalKey(md, str, key) {
+            const name = key?.name;
+            if (md.kind === "help" || md.kind === "result") {
+                ui.modal = null;
+                return;
+            }
+            if (md.kind === "approve") {
+                const { lines, view } = (0, render_1.approveBody)(model, ui, st, md.holdId);
+                const max = Math.max(0, lines.length - view);
+                switch (name ?? str) {
+                    case "escape":
+                    case "q":
+                    case "n":
+                        ui.modal = null;
+                        return;
+                    case "down":
+                    case "j":
+                        md.scroll = Math.min(max, md.scroll + 1);
+                        return;
+                    case "up":
+                    case "k":
+                        md.scroll = Math.max(0, md.scroll - 1);
+                        return;
+                    case "space":
+                    case "pagedown":
+                        md.scroll = Math.min(max, md.scroll + view);
+                        return;
+                    case "pageup":
+                        md.scroll = Math.max(0, md.scroll - view);
+                        return;
+                    case "y":
+                        if (!(0, render_1.approveSeenAll)(model, ui, st, md.holdId, md.scroll)) {
+                            toast("read the whole input first — scroll to the end, then y", "warn");
+                            return;
+                        }
+                        return decide("approve", md.holdId);
+                    default:
+                        return;
+                }
+            }
+            // Text entry: deny's alternative, or a steer.
+            if (name === "escape") {
+                ui.modal = null;
+                toast(md.kind === "deny" ? "deny cancelled — still held" : "steer cancelled", "muted");
+                return;
+            }
+            if (name === "return" || name === "enter") {
+                if (md.kind === "deny")
+                    return decide("deny", md.holdId, md.text);
+                return submitSteer(md.target, md.text);
+            }
+            if (name === "backspace") {
+                md.text = [...md.text].slice(0, -1).join("");
+                return;
+            }
+            if (key?.ctrl && name === "u") {
+                md.text = "";
+                return;
+            }
+            if (key?.ctrl && name === "w") {
+                md.text = md.text.replace(/\s*\S+\s*$/, "");
+                return;
+            }
+            if (str && !key?.ctrl && !key?.meta && !/[\x00-\x1f\x7f]/.test(str))
+                md.text += str;
+        }
+        /* ----------------------------------------------------------- start */
+        out.write(TITLE_PUSH + ALT_ON + HIDE_CURSOR + WRAP_OFF + `${ESC}2J`);
         readline.emitKeypressEvents(stdin);
         try {
             stdin.setRawMode?.(true);
@@ -235,230 +461,20 @@ function runInteractive(db, repo, threshold, intervalSec) {
             /* best-effort */
         }
         stdin.resume();
-        stdin.on("keypress", onKeypress);
+        stdin.on("keypress", onKey);
+        out.on("resize", onResize);
         process.on("exit", cleanup);
-        render();
-        timer = setInterval(render, Math.max(500, intervalSec * 1000));
+        for (const sig of ["SIGTERM", "SIGHUP"])
+            process.once(sig, quit);
+        setTitle();
+        draw();
+        timer = setInterval(tick, Math.max(500, intervalSec * 1000));
     });
 }
-/** Read one line from the user, temporarily leaving raw mode and showing the cursor. */
-function promptLine(question) {
-    return new Promise((resolve) => {
-        const wasRaw = !!process.stdin.isRaw;
-        try {
-            process.stdin.setRawMode?.(false);
-        }
-        catch {
-            /* ignore */
-        }
-        // Drop to the bottom of the screen with the cursor visible for typing.
-        process.stdout.write(SHOW_CURSOR + "\n");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        rl.question(question, (answer) => {
-            rl.close();
-            if (wasRaw) {
-                try {
-                    process.stdin.setRawMode?.(true);
-                }
-                catch {
-                    /* ignore */
-                }
-            }
-            process.stdout.write(HIDE_CURSOR);
-            resolve(answer);
-        });
-    });
-}
-/** Snapshot the project's sessions for one frame. Tolerates a transient lock. */
-function buildModel(db, repo, threshold, limit = DEFAULT_LIMIT) {
-    const sessions = [];
-    try {
-        const hasName = (0, db_1.hasSessionNameColumn)(db);
-        const rows = db
-            .prepare(`SELECT s.id, ${hasName ? "s.name, " : ""}s.ended, s.final_outcome, s.started,
-                COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
-           FROM sessions s
-           LEFT JOIN tool_calls t ON t.session_id = s.id
-          GROUP BY s.id
-          ORDER BY COALESCE(MAX(t.ts), s.started) DESC
-          LIMIT ?`)
-            .all(limit);
-        for (const r of rows) {
-            // Per-hash repeat counts power the loop marks; one grouped query per session.
-            const counts = new Map();
-            const hashRows = db
-                .prepare(`SELECT input_hash, COUNT(*) AS n FROM tool_calls WHERE session_id = ? GROUP BY input_hash`)
-                .all(r.id);
-            for (const h of hashRows)
-                counts.set(h.input_hash, h.n);
-            // Last RECENT_CALLS calls, newest-first from the DB, flipped to chronological.
-            const callRows = db
-                .prepare(`SELECT tool, input_summary, input_hash, ok
-               FROM tool_calls WHERE session_id = ? ORDER BY seq DESC LIMIT ?`)
-                .all(r.id, RECENT_CALLS).reverse();
-            const recent = callRows.map((cr) => {
-                const denied = cr.input_summary.startsWith("DENIED: ");
-                return {
-                    tool: cr.tool,
-                    summary: denied ? cr.input_summary.slice(8) : cr.input_summary,
-                    denied,
-                    failed: cr.ok === 0,
-                    looped: (counts.get(cr.input_hash) ?? 0) >= threshold,
-                };
-            });
-            const lastTsStr = r.last_ts || r.started;
-            sessions.push({
-                id: r.id,
-                name: (0, names_1.displayName)(r.id, r.name),
-                ended: !!r.ended,
-                outcome: r.final_outcome,
-                calls: r.calls,
-                lastTsMs: lastTsStr ? safeParse(lastTsStr) : null,
-                // "Looping right now" = the most recent call's exact input has already
-                // fired >= threshold times. More useful for a live cockpit than "ever".
-                looping: recent.length > 0 ? recent[recent.length - 1].looped : false,
-                steerQueued: (0, steering_1.peekSteering)(undefined, r.id),
-                recent,
-            });
-        }
-    }
-    catch {
-        /* DB momentarily locked by a writer — render whatever we have (often empty). */
-    }
-    return { repo, sessions, broadcast: (0, steering_1.peekSteering)(undefined), threshold };
-}
-/** Pure renderer: a model + UI state in, the full frame (string) out. Testable. */
-function renderFrame(model, ui, interactive) {
-    const lines = [];
-    const repoName = path.basename(model.repo) || model.repo;
-    const clock = new Date(ui.nowMs).toISOString().slice(11, 19);
-    const width = ui.width || 100;
-    lines.push(format_1.c.bold("reins · watch") +
-        "  " +
-        format_1.c.cyan(repoName) +
-        format_1.c.dim(`   ${clock} · every ${ui.intervalSec}s · loop≥${model.threshold}`));
-    if (model.broadcast) {
-        lines.push(format_1.c.dim("  broadcast steer queued: ") + format_1.c.cyan('"' + (0, util_1.truncate)(model.broadcast.replace(/\n/g, " "), 60) + '"'));
-    }
-    lines.push("");
-    if (model.sessions.length === 0) {
-        lines.push(format_1.c.dim("  No sessions yet. Start an agent in this repo and they'll appear here."));
-    }
-    else {
-        const sep = "  " + format_1.c.dim("─".repeat(Math.min(width - 2, 64)));
-        model.sessions.forEach((s, i) => {
-            if (i > 0)
-                lines.push(sep);
-            lines.push(headerLine(s, s.id === ui.selectedId, ui.nowMs));
-            if (s.recent.length === 0) {
-                lines.push("      " + format_1.c.dim("(no calls yet)"));
-            }
-            else {
-                for (const call of s.recent)
-                    lines.push("      " + callLine(call, width));
-            }
-        });
-    }
-    lines.push("");
-    if (ui.message)
-        lines.push("  " + ui.message);
-    if (interactive) {
-        lines.push(format_1.c.dim("  ↑/↓ jk select · ") +
-            format_1.c.bold("s") +
-            format_1.c.dim(" steer one · ") +
-            format_1.c.bold("b") +
-            format_1.c.dim(" broadcast · ") +
-            format_1.c.bold("c") +
-            format_1.c.dim(" clear · ") +
-            format_1.c.bold("r") +
-            format_1.c.dim(" refresh · ") +
-            format_1.c.bold("q") +
-            format_1.c.dim(" quit"));
-    }
-    return lines.join("\n");
-}
-/** The session's header line: caret, name, id, status, call count + age, steer flag. */
-function headerLine(s, selected, nowMs) {
-    const caret = selected ? format_1.c.cyan(format_1.c.bold("›")) : " ";
-    const label = pad(s.name ?? (0, names_1.displayName)(s.id), 14);
-    const name = selected ? format_1.c.bold(label) : format_1.c.cyan(label);
-    const id = format_1.c.dim(pad(shortId(s.id), 8));
-    const status = statusCell(s, nowMs);
-    const age = s.lastTsMs != null ? nowMs - s.lastTsMs : null;
-    const meta = format_1.c.dim(`${s.calls} call${s.calls === 1 ? "" : "s"}` + (age != null ? ` · ${formatAge(age)} ago` : ""));
-    const steer = s.steerQueued ? "   " + format_1.c.magenta("✎ steer queued") : "";
-    return `  ${caret} ${name} ${id}  ${status}  ${meta}${steer}`;
-}
-function statusCell(s, nowMs) {
-    const age = s.lastTsMs != null ? nowMs - s.lastTsMs : null;
-    const recent = age != null && age < ACTIVE_WINDOW_MS;
-    // Liveness is driven by recent tool activity, NOT the `ended` flag. Claude
-    // Code fires the Stop hook at every *turn* boundary, so an interactive session
-    // gets marked "ended" between turns while it's very much still alive and
-    // steerable. If it called a tool within ACTIVE_WINDOW it's active, full stop —
-    // otherwise fall back to its recorded outcome / loop / idle age.
-    if (recent)
-        return s.looping ? format_1.c.red(pad("⟳ looping", 11)) : format_1.c.yellow(pad("● active", 11));
-    if (s.ended)
-        return format_1.c.green(pad(s.outcome || "ended", 11));
-    if (s.looping)
-        return format_1.c.red(pad("⟳ looping", 11));
-    return format_1.c.dim(pad("○ idle " + (age != null ? formatAge(age) : "?"), 11));
-}
-/** One indented tool-call line under a session block. */
-function callLine(call, width) {
-    let glyph;
-    if (call.denied)
-        glyph = format_1.c.red("⛔");
-    else if (call.failed)
-        glyph = format_1.c.yellow("✗");
-    else
-        glyph = format_1.c.green(toolGlyph(call.tool));
-    const tool = format_1.c.dim(pad(call.tool, 8));
-    const summary = (0, util_1.truncate)((call.summary || "").replace(/\s+/g, " "), Math.max(24, width - 22));
-    const loopMark = call.looped ? format_1.c.yellow(" ⟳") : "";
-    return `${glyph} ${tool} ${summary}${loopMark}`;
-}
-function toolGlyph(tool) {
-    switch (tool) {
-        case "Write":
-            return "✎";
-        case "Edit":
-        case "MultiEdit":
-        case "NotebookEdit":
-            return "✏";
-        case "Bash":
-            return "▶";
-        case "Read":
-        case "NotebookRead":
-            return "·";
-        case "Glob":
-        case "Grep":
-            return "?";
-        default:
-            return "•";
-    }
-}
-/** Pad a PLAIN string to width before coloring (color codes have zero display width). */
-function pad(s, width) {
-    return s.length >= width ? s : s + " ".repeat(width - s.length);
-}
-function formatAge(ms) {
-    const s = Math.max(0, Math.round(ms / 1000));
-    if (s < 60)
-        return `${s}s`;
-    const m = Math.floor(s / 60);
-    if (m < 60)
-        return `${m}m`;
-    const h = Math.floor(m / 60);
-    return `${h}h`;
-}
-function safeParse(iso) {
-    const t = Date.parse(iso);
-    return Number.isFinite(t) ? t : null;
-}
-function shortId(id) {
-    return id.length > 8 ? id.slice(0, 8) : id;
+/** Terminals known to show OSC 9 as a desktop notification. Elsewhere, the bell. */
+function supportsOsc9(env = process.env) {
+    const tp = env.TERM_PROGRAM || "";
+    return tp === "iTerm.app" || tp === "WezTerm" || tp === "ghostty";
 }
 function parseInterval(args) {
     const i = args.findIndex((a) => a === "-n" || a === "--interval");

@@ -158,6 +158,21 @@ convenient it looks:
 `pending/`, the agent's next attempt re-matches the rule and parks again, and the human is
 asked the same question forever.
 
+**Every surface that approves applies the same rules.** reins has two: the `approve`/`deny`
+commands and the `watch` cockpit. Both call one implementation, and any new surface should
+too. A surface where one keystroke approves has two more duties than a typed command:
+
+- **Show the whole proposal before accepting.** The human approves what they read, so an
+  approval control stays disabled until the full input has been on screen. A long script
+  must not be approvable from its first line.
+- **Re-check at the moment of decision.** The proposal is re-read when the human confirms.
+  If it was resolved elsewhere, or no longer matches what was shown (input, directory, or
+  deferred call id), nothing is approved.
+
+No approval surface listens on a network port. An HTTP endpoint on localhost can receive
+requests from any web page the human has open, so a local web view may show the queue
+and the commands to answer it but must not answer it itself.
+
 ## 7. The record (optional)
 
 Implementations may keep an audit trail of every gate decision — proposed action, rule,

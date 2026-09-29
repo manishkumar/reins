@@ -358,27 +358,46 @@ Summary
 - `reins lastrun <session>` — inspect a specific older run (id prefix or name).
 - `reins loops` — just the sessions where the agent got stuck.
 
-### `reins watch` — the multi-agent cockpit
+### `reins watch` — the cockpit
 
-`reins sessions` is a snapshot; **`reins watch` is the live view.** A self-refreshing dashboard of every agent in the repo — each one's last tool call, whether it's **active / idle / looping right now**, and any steering already queued for it — built for the case a built-in queued message can't serve: **aiming a nudge at one of several running agents without alt-tabbing into its window.**
+`reins sessions` is a snapshot; **`reins watch` is where you run things from.** One screen shows every agent in the repo and everything waiting on you, and it has the controls to answer: approve or deny a held action, and steer one agent or all of them. It's built for the case a built-in queued message can't serve: several agents running and one person watching.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/watch.svg" alt="reins watch: three agent sessions, each named, with live status (active / looping / completed), a trajectory tail of recent tool calls, and steer-queued flags" width="680">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/watch.svg" alt="reins watch: a NEEDS YOU pane with a held npm publish and a worked-around guard, an AGENTS pane with live status and activity sparklines, and a detail pane showing the held action's rule, session, directory and full proposed input" width="760">
 </p>
 
-Each agent is its own block — live status (`active` / `idle` / `looping` / outcome), its **recent trajectory tail**, and any queued steering — divided from the next by a rule. Status is driven by *recent tool activity*, not the per-turn Stop hook, so an agent that's mid-conversation reads `active`, not `completed`.
+- **NEEDS YOU**, top left: every held action, plus hold breaches and worked-around guards from the last 7 days. It reads from `.reins/pending/` and the bypass ledger, so it works without SQLite.
+- **AGENTS**, below: each session's live status (`active` / `looping` / `idle` / `done`), a sparkline of its calls over the last 12 minutes, and its last call, queued steer, or held action. Status comes from recent tool activity, not the per-turn Stop hook, so an agent mid-conversation reads `active`. `looping` means the same call several times in a row, as the loop alarm counts it.
+- **Detail**, right: for a hold, the rule, reason, session, directory, transport, and the **full proposed input**. For an agent, its activity and trajectory, newest first. `⏎` zooms it to full screen.
 
-Select a session with `↑/↓` (or `j`/`k`), then:
-- **`s`** — steer *just that agent* (writes its per-session nudge; lands at its next tool call).
-- **`b`** — broadcast a nudge to all of them.
-- **`c`** — clear that agent's queued steering. **`r`** — refresh now. **`q`** — quit.
+| key | does |
+|---|---|
+| `↑↓` `j k` · `tab` | move · jump to the next section |
+| `a` | approve the selected held action (see below) |
+| `d` | deny it, optionally typing what the agent should do instead (sent as steering) |
+| `s` · `b` · `c` | steer the selected agent (or the hold's agent) · broadcast to all · clear its queued steer |
+| `⏎` · `J K` · `?` · `q` | zoom detail · scroll detail · help · quit |
 
-Read-only over the same `.reins/runs.db`; it never touches a running agent except through the steering you type. Tune the cadence with `reins watch -n 1` (seconds). Piped or non-interactive (`reins watch --once`) it prints a single snapshot instead of taking over the screen — handy in scripts. No TUI library, no daemon — just ANSI on the terminal you already have.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/watch-approve.svg" alt="reins watch approve dialog: 'Approve this exact call, once?' with the rule, reason, session, directory and the exact input, and y to approve or esc to cancel" width="760">
+</p>
+
+**Approving here is `reins approve`, with two extra checks a keypress needs and a typed command doesn't.** Both go through the same code (`src/holdActions.ts`), so an approval still clears one exact call, once. On top of that:
+
+- **The dialog shows the full input and `y` stays locked until you have scrolled to the end of it.** A 120-line heredoc can't be approved from its first line.
+- **The action is re-read at the moment you press `y`.** If it was answered from another terminal, or no longer matches what you reviewed, nothing is approved and the cockpit tells you so.
+
+When a new hold arrives, the header flashes and the terminal bell rings. iTerm2, WezTerm and Ghostty also get a desktop notification. `--quiet` turns off the bell and notification. **The selection never moves on its own**, because a list that reorders under your cursor is how the wrong thing gets approved. Steering from the cockpit appends to what's already queued, like `reins steer`, so a queued nudge is never overwritten.
+
+Text from agent runs (commands, paths, steering) is untrusted, and control characters are stripped before it reaches your terminal. Otherwise a command containing escape sequences could set your clipboard or draw over the approve dialog.
+
+Nothing listens on a port: the only way in is the keyboard of whoever started it. That's why approving lives here and not in `reins report`. Tune the refresh with `reins watch -n 1` (seconds). Piped or with `--once`, it prints one plain snapshot, including the `reins approve` / `reins deny` command for each hold, so it works in scripts. No TUI library and no daemon: raw ANSI on the terminal you already have, and it needs at least 60×14.
 
 ### `reins report` — the captured runs as a local web page
 
 `watch` is the live view; **`reins report` is the browsable archive.** It reads `.reins/runs.db` and writes a single **self-contained HTML file** (inline CSS, no JS framework, **zero network requests** — nothing leaves your machine) with:
 
+- **Needs you**, at the top: every parked hold with its proposed input, how long it has waited, and the `reins approve` / `reins deny` commands to copy; then any hold breach or worked-around guard from the last 7 days. Older events are counted, not listed (`reins audit --guards` has them all). There is no approve button: approving stays a deliberate CLI action, and a page that could approve would need a local server any website could send requests to.
 - **Summary cards** — sessions, tool calls, blocked, failed, loops, plus **token and cost rollups** when the transcript had them (best-effort; hidden when never captured).
 - **Per-tool breakdown** — how the calls split across tools (Bash vs Edit vs Read…), with per-tool blocked/failed counts.
 - **Guard-fire heatmap** — which guard rules actually fired, split into denied (⛔) vs escalated-to-you (✋), so you can see which rules earn their keep and which never trigger.
@@ -389,6 +408,8 @@ reins report            # writes .reins/report.html
 reins report --open     # ...and opens it in your browser
 reins report -o /tmp/run.html   # custom path (e.g. to share a single run)
 ```
+
+Finished sessions start collapsed unless they're the latest or have something in "Needs you". The file is written owner-only (`0600`) because it contains commands and paths from your runs. Without SQLite (Node < 22.5, or `REINS_NO_SQLITE=1`) the report still renders holds and the bypass ledger, since those are plain files; session history needs capture.
 
 It's the same local-first deal as the rest of reins: a file you own, readable offline, safe to delete. The richer "what happened across every run" view a terminal can't give you.
 
@@ -494,7 +515,7 @@ reins audit --guards [--json]    Were the guards right? Every denial ever record
                                  scored: stale rules, and vetoes worked around anyway
 reins lastrun [session]          Readable account of a run (id prefix or name)
 reins sessions [-n N]            List recent sessions (with names)
-reins watch [-n SECS] [--once]   Live cockpit: all agents, steer any one
+reins watch [-n SECS] [--once] [--quiet]  Cockpit: approve/deny holds, steer agents
 reins report [--open] [-o FILE]  Self-contained local HTML report of all runs
 reins loops                      Sessions where the agent looped
 reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)

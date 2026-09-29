@@ -10,9 +10,8 @@
 // colors survive), then run it through this.
 //
 // Understands the subset of ANSI that src/commands/format.ts emits — SGR codes
-// 0/1/2/31-36 — plus the 256-color and truecolor forms the Claude Code TUI
-// paints in, since some captures are of a live session rather than of a reins
-// command. Any other escape sequence (cursor moves, erases) that a pty capture
+// 0/1/2/31-36 — plus the 256-color and truecolor forms (foreground and
+// background) that `reins watch` and the Claude Code TUI paint in. Any other escape sequence (cursor moves, erases) that a pty capture
 // drags along is silently dropped.
 
 import * as fs from "node:fs";
@@ -72,15 +71,16 @@ const lines = raw.split("\n");
 // Drop trailing blank lines but keep intentional inner ones.
 while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
 
-/** Parse one line into styled spans: [{text, color, bold, dim}] */
+/** Parse one line into styled spans: [{text, color, bg, bold, dim}] */
 function parseLine(line) {
   const spans = [];
   let color = null;
+  let bg = null;
   let bold = false;
   let dim = false;
   let buf = "";
   const flush = () => {
-    if (buf) spans.push({ text: buf, color, bold, dim });
+    if (buf) spans.push({ text: buf, color, bg, bold, dim });
     buf = "";
   };
   for (let i = 0; i < line.length; i++) {
@@ -93,7 +93,11 @@ function parseLine(line) {
           const codes = (m[1] || "0").split(";").map(Number);
           for (let k = 0; k < codes.length; k++) {
             const code = codes[k];
-            if (code === 0) (color = null), (bold = false), (dim = false);
+            if (code === 0) (color = null), (bg = null), (bold = false), (dim = false);
+            else if (code === 49) bg = null;
+            else if (code === 48 && codes[k + 1] === 5) (bg = xterm256(codes[k + 2])), (k += 2);
+            else if (code === 48 && codes[k + 1] === 2)
+              (bg = `rgb(${codes[k + 2]},${codes[k + 3]},${codes[k + 4]})`), (k += 4);
             else if (code === 1) bold = true;
             else if (code === 2) dim = true;
             else if (code === 22) (bold = false), (dim = false);
@@ -124,12 +128,17 @@ const height = CHROME_H + PAD_TOP + parsed.length * LINE_H + PAD_TOP;
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 let body = "";
+let backs = "";
 parsed.forEach((spans, row) => {
   if (!spans.length) return;
   const y = CHROME_H + PAD_TOP + row * LINE_H + FONT_SIZE;
   let col = 0;
   let tspans = "";
   for (const s of spans) {
+    if (s.bg) {
+      const top = CHROME_H + PAD_TOP + row * LINE_H - (LINE_H - FONT_SIZE) / 2 + 1;
+      backs += `<rect x="${(PAD_X + col * CHAR_W).toFixed(1)}" y="${top.toFixed(1)}" width="${(s.text.length * CHAR_W).toFixed(1)}" height="${LINE_H}" fill="${s.bg}"/>\n`;
+    }
     const fill = s.color ?? (s.dim ? DIM : FG);
     const weight = s.bold ? ' font-weight="700"' : "";
     // x is set per-tspan so glyph-width drift can never accumulate, and
@@ -155,7 +164,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${
 <circle cx="40" cy="${CHROME_H / 2}" r="5.5" fill="#febc2e"/>
 <circle cx="60" cy="${CHROME_H / 2}" r="5.5" fill="#28c840"/>
 ${titleText}
-${body}</svg>
+${backs}${body}</svg>
 `;
 
 fs.writeFileSync(outPath, svg);

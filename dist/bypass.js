@@ -58,6 +58,7 @@ exports.fingerprint = fingerprint;
 exports.containment = containment;
 exports.actionTokens = actionTokens;
 exports.retryScore = retryScore;
+exports.readLedger = readLedger;
 exports.recordDenial = recordDenial;
 exports.findBypass = findBypass;
 exports.markBypassed = markBypassed;

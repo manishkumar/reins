@@ -3,6 +3,61 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`reins watch` is now a cockpit you can act from.** Three panes: NEEDS YOU
+  (held actions, hold breaches, worked-around guards), AGENTS (live status,
+  a 12-minute activity sparkline, last call or queued steer), and a detail
+  pane with a hold's full proposed input or an agent's trajectory.
+  - **Approve and deny from the keyboard.** `a` opens a dialog with the full
+    input, and `y` stays locked until it has been scrolled to the end. The
+    action is re-read when `y` is pressed, and nothing is approved if it was
+    resolved elsewhere or no longer matches what was reviewed. `d` denies,
+    optionally with an alternative sent as steering. The CLI and the cockpit
+    share one implementation (`src/holdActions.ts`), and `reins audit`
+    records the resolver as `human-tui` or `human-cli`.
+  - **New holds are announced** with a header flash, the terminal bell, and a
+    desktop notification in iTerm2, WezTerm and Ghostty. `--quiet` silences
+    the bell and notification. The selection never moves on its own.
+  - **Works without SQLite** as an approval queue: holds and the bypass
+    ledger are files. The agents pane explains that it needs capture.
+  - **Agent text is sanitized** before it reaches the terminal. Control
+    characters in commands and paths are replaced, so an escape sequence in
+    a command can't set the clipboard or draw over a dialog.
+  - Resizes live, redraws only changed lines, and needs 60×14 at least.
+    `--once` and piped output print a plain snapshot with the `reins approve`
+    / `reins deny` command for each hold.
+
+- **`reins report` leads with what needs you.** A "Needs you" section at the
+  top lists every parked hold (the proposed input, how long it has waited, and
+  the `reins approve` / `reins deny` commands), plus hold breaches and
+  worked-around guards from the last 7 days. Older events are counted and
+  pointed at `reins audit --guards`. A page with nothing waiting says so.
+- **`reins report` works without SQLite.** Holds and the bypass ledger are
+  plain files, so the report now renders them on Node < 22.5 or with
+  `REINS_NO_SQLITE=1` and says that session history needs capture.
+
+### Changed
+
+- `reins watch` reads "looping" as a consecutive streak of identical calls,
+  matching the loop alarm. It used to count repeats anywhere in the session.
+- Steering typed into `reins watch` appends to the queue, like `reins steer`.
+  It used to replace it, which could drop a nudge that hadn't been delivered.
+
+- Finished sessions start collapsed in the report unless they are the most
+  recent one or have a "Needs you" item. Their summary line still shows the
+  blocked and loop counts.
+- The report file is written owner-only (`0600`), including when it overwrites
+  an existing file. It contains commands and paths from agent runs.
+- Durations of 48 hours or more read in days (`19d 3h`).
+
+### Fixed
+
+- The per-tool and guard-fire bars in the report rendered empty. The bar was
+  an inline element, so its width was ignored.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added

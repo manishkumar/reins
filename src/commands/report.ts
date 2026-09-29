@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { openDbReadOnly } from "../db";
+import { collectAttention, type Attention } from "../attention";
 import { capabilityNote } from "../store";
 import { loadConfig } from "../config";
 import { resolveProjectDir, reinsDir } from "../paths";
@@ -58,6 +59,9 @@ export interface GuardFire {
 
 export interface ReportData {
   repo: string;
+  /** False when runs.db could not be opened: the page renders from files only. */
+  captured?: boolean;
+  attention?: Attention;
   generatedIso: string;
   threshold: number;
   totals: {
@@ -79,26 +83,58 @@ export interface ReportData {
 const GUARD_TAG = /\s\[guard:([^\]]+)\]$/;
 
 export function cmdReport(args: string[]): number {
+  const repo = resolveProjectDir();
+  const threshold = loadConfig().loopThreshold;
   const db = openDbReadOnly();
-  if (!db) {
+  const attention = collectAttention(repo, db);
+  if (!db && !attention.holds.length && !attention.events.length) {
     console.log(c.dim(capabilityNote() || "Nothing to report yet — no .reins/runs.db. Run an agent first."));
     return 0;
   }
-  const repo = resolveProjectDir();
-  const threshold = loadConfig().loopThreshold;
-  const data = collect(db, repo, threshold);
+  const data: ReportData = db
+    ? { ...collect(db, repo, threshold), captured: true, attention }
+    : { ...emptyData(repo, threshold), captured: false, attention };
 
   const out = outPath(args, repo);
-  fs.writeFileSync(out, renderReportHtml(data));
+  writePrivate(out, renderReportHtml(data));
+  const needs = attention.holds.length + attention.events.length;
   console.log(
     c.green("✓ wrote ") +
       out +
-      c.dim(`  (${data.totals.sessions} sessions · ${data.totals.calls} calls)`),
+      c.dim(`  (${data.totals.sessions} sessions · ${data.totals.calls} calls)`) +
+      (needs ? c.yellow(`  ${needs} need${needs === 1 ? "s" : ""} you`) : ""),
   );
+  if (!db) console.log(c.dim("  " + (capabilityNote() || "no runs.db yet") + " — holds and guard reports only"));
 
   if (args.includes("--open")) tryOpen(out);
   else console.log(c.dim("  open it in a browser, or re-run with --open"));
   return 0;
+}
+
+/**
+ * The report embeds proposed commands and file paths from agent runs, which can
+ * carry secrets. Owner-only, like .reins/ itself — and chmod on overwrite,
+ * because writeFileSync's mode only applies when it creates the file.
+ */
+function writePrivate(file: string, content: string): void {
+  fs.writeFileSync(file, content, { mode: 0o600 });
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    /* best-effort on filesystems without POSIX modes */
+  }
+}
+
+function emptyData(repo: string, threshold: number): ReportData {
+  return {
+    repo,
+    generatedIso: new Date().toISOString(),
+    threshold,
+    totals: { sessions: 0, calls: 0, blocked: 0, failed: 0, loops: 0, tokens: null, cost: null },
+    tools: [],
+    guardFires: [],
+    sessions: [],
+  };
 }
 
 function collect(
@@ -236,9 +272,15 @@ export function renderReportHtml(d: ReportData): string {
     d.totals.cost != null ? card("est. cost", fmtCost(d.totals.cost)) : "",
   ].join("");
 
+  const flagged = new Set([
+    ...(d.attention?.holds ?? []).map((h) => h.sessionId),
+    ...(d.attention?.events ?? []).map((e) => e.sessionId),
+  ]);
   const sessions = d.sessions.length
-    ? d.sessions.map(sessionSection).join("\n")
-    : `<p class="empty">No sessions recorded yet.</p>`;
+    ? d.sessions.map((s, i) => sessionSection(s, i === 0 || flagged.has(s.id))).join("\n")
+    : d.captured === false
+      ? `<p class="empty">Session history needs capture, which is unavailable here (${esc(capabilityNote() || "no runs.db")}).</p>`
+      : `<p class="empty">No sessions recorded yet.</p>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -269,7 +311,7 @@ section.insight h2 { font-size: 13px; margin: 0 0 10px; color: #7d8590;
   align-items: center; padding: 3px 0; }
 .brow .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .brow .track { background: #0e1116; border-radius: 4px; height: 12px; overflow: hidden; }
-.brow .bar { height: 100%; background: #2f6feb; border-radius: 4px; min-width: 2px; }
+.brow .bar { display: block; height: 100%; background: #2f6feb; border-radius: 4px; min-width: 2px; }
 .brow.guard .bar { background: #b62324; }
 .brow .cnt { color: #7d8590; font-size: 12px; text-align: right; }
 .brow .cnt .deny { color: #ff7b72; } .brow .cnt .ask { color: #e3b341; }
@@ -299,6 +341,22 @@ details.session > summary::-webkit-details-marker { display: none; }
   border-radius: 20px; padding: 1px 7px; margin-left: 6px; white-space: nowrap; }
 .loop { color: #e3b341; }
 .empty { color: #7d8590; }
+section.attn { border: 1px solid #5a1e1e; background: #1a1214; border-radius: 10px;
+  margin-bottom: 28px; padding: 14px 16px; }
+section.attn.clear { border-color: #1f3d28; background: #111a14; color: #3fb950; padding: 10px 16px; }
+section.attn h2 { font-size: 13px; margin: 0 0 12px; color: #ff7b72;
+  text-transform: uppercase; letter-spacing: .06em; }
+.item { border-top: 1px solid #2d2226; padding: 10px 0; }
+.item:first-of-type { border-top: 0; padding-top: 0; }
+section.attn .cmds:last-child { margin-top: 8px; }
+.item .head { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.item .kind { font-weight: 700; }
+.item .kind.hold { color: #e3b341; } .item .kind.breach, .item .kind.bypass { color: #ff7b72; }
+.item .why { color: #7d8590; font-size: 12.5px; margin: 4px 0; }
+.item pre { margin: 6px 0; padding: 8px 10px; background: #0e1116; border-radius: 6px;
+  max-height: 9.5em; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 12.5px; }
+.item .cmds { font-size: 12.5px; color: #7d8590; }
+.item code { user-select: all; color: #d7dde5; background: #0e1116; padding: 1px 6px; border-radius: 4px; }
 footer { margin-top: 28px; color: #586069; font-size: 11.5px; }
 </style>
 </head>
@@ -306,6 +364,7 @@ footer { margin-top: 28px; color: #586069; font-size: 11.5px; }
 <div class="wrap">
 <h1>reins report · <span class="repo">${esc(repoName)}</span></h1>
 <p class="sub">${esc(d.repo)} · generated ${esc(d.generatedIso)} · loop threshold ${d.threshold}× · 100% local, no data left this machine</p>
+${attentionSection(d)}
 <div class="cards">${cards}</div>
 ${toolBreakdownSection(d.tools ?? [])}
 ${guardHeatmapSection(d.guardFires ?? [])}
@@ -314,6 +373,44 @@ ${sessions}
 </div>
 </body>
 </html>`;
+}
+
+/**
+ * The top of the page: everything that is waiting on, or was hidden from, the
+ * human. Led by what they can act on now (a parked hold), then what already
+ * went wrong (a hold that didn't hold, a denial worked around). Empty says so,
+ * so a clean page reads as clean rather than as missing.
+ */
+function attentionSection(d: ReportData): string {
+  const a = d.attention;
+  if (!a) return "";
+  const older = a.olderEvents
+    ? `<div class="cmds">${a.olderEvents} older breach/bypass event${a.olderEvents === 1 ? "" : "s"} not listed: <code>reins audit --guards</code></div>`
+    : "";
+  if (!a.holds.length && !a.events.length) {
+    return `<section class="attn clear">✓ Nothing needs you: no parked holds, and no breaches or worked-around guards this week.${older}</section>`;
+  }
+  const now = Date.parse(d.generatedIso);
+  const holds = a.holds.map((h) => {
+    const waited = Number.isFinite(now - Date.parse(h.ts)) ? ` · waiting ${humanDuration(Math.max(0, now - Date.parse(h.ts)))}` : "";
+    return `<div class="item">
+<div class="head"><span class="kind hold">✋ held</span><span class="tool">${esc(h.tool)}</span><span class="rule">${esc(h.ruleId)}</span><span class="meta">session ${esc(shortId(h.sessionId))}${esc(waited)}</span></div>
+<div class="why">${esc(h.reason)}</div>
+<pre>${esc(h.input)}</pre>
+<div class="cmds"><code>reins approve ${esc(h.id)}</code> or <code>reins deny ${esc(h.id)}</code></div>
+</div>`;
+  });
+  const events = a.events.map((e) => {
+    const label = e.kind === "breach" ? "⚠ hold breached" : "↪ guard worked around";
+    const rule = e.ruleId ? `<span class="rule">${esc(e.ruleId)}</span>` : "";
+    return `<div class="item">
+<div class="head"><span class="kind ${e.kind}">${label}</span><span class="tool">${esc(e.tool)}</span>${rule}<span class="meta">session ${esc(shortId(e.sessionId))} · ${esc(e.ts.replace("T", " ").replace(/\..*/, ""))}</span></div>
+<div class="why">${esc(e.detail)}</div>
+<pre>${esc(e.summary)}</pre>
+</div>`;
+  });
+  const n = a.holds.length + a.events.length;
+  return `<section class="attn"><h2>Needs you · ${n}</h2>${holds.join("")}${events.join("")}${older}</section>`;
 }
 
 /** Per-tool breakdown: one bar per tool, width relative to the busiest tool. */
@@ -350,7 +447,7 @@ function guardHeatmapSection(fires: GuardFire[]): string {
   return `<section class="insight"><h2>Guard fires</h2>${rows}</section>`;
 }
 
-function sessionSection(s: ReportSession): string {
+function sessionSection(s: ReportSession, flagged = true): string {
   const status = s.ended ? s.outcome || "ended" : "running";
   const badgeClass = s.ended ? "completed" : "running";
   const bits: string[] = [`${s.calls} calls`];
@@ -365,7 +462,11 @@ function sessionSection(s: ReportSession): string {
     ? s.trajectory.map(trajRow).join("")
     : `<div class="row"><span></span><span></span><span class="sum empty">(no tool calls)</span></div>`;
 
-  return `<details class="session" open>
+  // Only what the reader came for starts open: a running session, the latest
+  // one, or one with a "needs you" item. The rest collapse to their summary
+  // line, which already carries the blocked/loop counts.
+  const open = !s.ended || flagged;
+  return `<details class="session"${open ? " open" : ""}>
 <summary>
   <span class="sid">${esc(shortId(s.id))}</span>
   <span class="badge ${badgeClass}">${esc(status)}</span>
@@ -417,7 +518,8 @@ function humanDuration(ms: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ${s % 60}s`;
   const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  if (h < 48) return `${h}h ${m % 60}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
 function outPath(args: string[], repo: string): string {

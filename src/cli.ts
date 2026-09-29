@@ -178,7 +178,9 @@ USAGE
   reins audit --guards             Were the guards right? Every denial scored:
                                    stale rules, and vetoes worked around anyway
   reins sessions                   List recent sessions in this project
-  reins watch                      Live cockpit: all agents, steer any one
+  reins watch                      Cockpit: every agent and everything waiting on
+                                   you; approve/deny holds, steer any agent
+                                   (--once snapshot, --quiet no bell, -n SECS)
   reins report [--open]            Write a local HTML report of every run
   reins loops                      Sessions where the agent looped
 

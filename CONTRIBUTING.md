@@ -24,6 +24,16 @@ automatically — no need to re-link).
 - `src/hooks/` — the three hook handlers (`pre-tool`, `post-tool`, `stop`).
 - `src/commands/` — user-facing commands.
 - `src/guards.ts`, `src/steering.ts`, `src/db.ts` — the core primitives.
+- `src/holdActions.ts` — the one implementation of approving and refusing a hold,
+  used by both `reins approve`/`deny` and the cockpit.
+- `src/attention.ts` — what needs a human (holds, breaches, bypasses), shared by
+  `reins report` and `reins watch`.
+- `src/tui/` — the `reins watch` cockpit: `term.ts` (width, sanitizing, styling,
+  boxes), `model.ts` (one frame of data), `render.ts` (a pure function from
+  model + UI state to screen lines). Keep rendering pure so it stays testable
+  without a terminal; `src/commands/watch.ts` is the only part that touches it.
+  To refresh the README screenshots: `node assets/watch-frame.cjs` piped
+  through `assets/ansi2svg.mjs` (usage in the script header).
 - `test/` — `node:test` unit tests over the pure logic.
 
 ## Guiding principles (please read before a big PR)

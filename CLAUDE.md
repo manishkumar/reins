@@ -107,6 +107,18 @@ will never see. That is the frame for everything below.
     to survive, not just the tokens, or a `git fetch` reads as a bypassed
     `git push --force`.
 
+13. **Every approval surface is `reins approve`, never a looser copy.** The CLI and
+    the `reins watch` cockpit resolve holds through `src/holdActions.ts` and nothing
+    else. The cockpit adds two checks a keypress needs: `y` stays locked until the full
+    input has been scrolled through, and the action is re-read by exact id at
+    confirmation (`reloadForDecision`), approving nothing if it is gone or changed. The
+    selection never moves on its own, so a new hold can't slide under the cursor. The
+    HTML report may show the queue but never answers it: an approve button would need a
+    local server, which any open web page can POST to. Text from agent runs goes through
+    `clean()` in `src/tui/term.ts` before it reaches the terminal; an escape sequence in
+    a command can otherwise set the clipboard or paint over the approve dialog. None of
+    `src/tui/` is reachable from `reins hook *`.
+
 ## Judgment calls that keep recurring
 
 - **Steering is added spec, not a hijack.** The vocabulary is "steer"/"nudge" — never
