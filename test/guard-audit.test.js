@@ -88,9 +88,20 @@ function seedDb(dir, calls, { withDecisions = true } = {}) {
   return path.join(dir, ".reins", "runs.db");
 }
 
+// Handles are tracked so cleanup can close them first: Windows refuses to
+// delete a directory while a file in it is still open.
+const openHandles = [];
+
 function openRO(dir) {
   const { DatabaseSync } = require("node:sqlite");
-  return new DatabaseSync(path.join(dir, ".reins", "runs.db"), { readOnly: true });
+  const db = new DatabaseSync(path.join(dir, ".reins", "runs.db"), { readOnly: true });
+  openHandles.push(db);
+  return db;
+}
+
+function rmProject(dir) {
+  while (openHandles.length) openHandles.pop().close();
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 function runCli(args, cwd) {
@@ -113,14 +124,14 @@ test("collectDenials: reads denials a pre-0.4 capture only kept in tool_calls", 
   // The tag is stripped back off, so the command can be re-matched as recorded.
   assert.strictEqual(rows[0].summary, "rm -rf .next");
   assert.strictEqual(rows[0].rule_id, "rm-rf");
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("collectDenials: a denial in both tables is counted once", { skip: !hasSqlite }, () => {
   const dir = tmpProject();
   seedDb(dir, [{ command: "rm -rf .next", rule_id: "rm-rf", ts: T(0) }]);
   assert.strictEqual(collectDenials(openRO(dir)).length, 1);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 // ---------- verdict: stale ----------
@@ -146,7 +157,7 @@ test("auditGuards: counts denials the shipped rules would not produce", { skip: 
   assert.strictEqual(report.policyBehind, true);
   assert.strictEqual(report.rules[0].rule_id, "rm-rf");
   assert.strictEqual(report.rules[0].stale, 2);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("auditGuards: an already-upgraded project is told these are history", { skip: !hasSqlite }, () => {
@@ -155,7 +166,7 @@ test("auditGuards: an already-upgraded project is told these are history", { ski
   const report = auditGuards(openRO(dir), dir);
   assert.strictEqual(report.stale, 1);
   assert.strictEqual(report.policyBehind, false);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 // ---------- verdict: worked around ----------
@@ -171,7 +182,7 @@ test("auditGuards: a denial undone by the same command minus a flag", { skip: !h
   const sample = report.rules[0].samples.find((s) => s.workaround);
   assert.ok(sample.workaround.score >= 0.8);
   assert.strictEqual(sample.workaround.gapMs, 60000);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("auditGuards: a different verb on the same target is NOT a workaround", { skip: !hasSqlite }, () => {
@@ -188,7 +199,7 @@ test("auditGuards: a different verb on the same target is NOT a workaround", { s
   ]);
   const report = auditGuards(openRO(dir), dir);
   assert.strictEqual(report.workedAround, 0);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("auditGuards: a retry outside the window is not attributed", { skip: !hasSqlite }, () => {
@@ -198,7 +209,7 @@ test("auditGuards: a retry outside the window is not attributed", { skip: !hasSq
     { command: "rm -r build", ts: T(30) }, // window is 15 minutes
   ]);
   assert.strictEqual(auditGuards(openRO(dir), dir).workedAround, 0);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("auditGuards: another session's call is never someone else's bypass", { skip: !hasSqlite }, () => {
@@ -208,7 +219,7 @@ test("auditGuards: another session's call is never someone else's bypass", { ski
     { command: "rm -r build", ts: T(1), session: "s2" },
   ]);
   assert.strictEqual(auditGuards(openRO(dir), dir).workedAround, 0);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 // ---------- the command ----------
@@ -226,7 +237,7 @@ test("reins audit --guards: reports both verdicts and what to do", { skip: !hasS
   assert.match(out, /wouldn't fire under today's shipped rules/);
   assert.match(out, /ran anyway/);
   assert.match(out, /reins policy upgrade/);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("reins audit --guards --json: the machine-readable shape", { skip: !hasSqlite }, () => {
@@ -237,19 +248,19 @@ test("reins audit --guards --json: the machine-readable shape", { skip: !hasSqli
   assert.strictEqual(report.stale, 1);
   assert.strictEqual(report.rules[0].rule_id, "rm-rf");
   assert.strictEqual(report.rules[0].samples[0].firesShipped, false);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("reins audit --guards: says so plainly when there is nothing to audit", { skip: !hasSqlite }, () => {
   const dir = tmpProject();
   seedDb(dir, [{ command: "npm test", ts: T(0) }]);
   assert.match(runCli(["audit", "--guards"], dir), /nothing to audit/);
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
 
 test("reins audit --guards: a project with no capture at all still exits clean", () => {
   const dir = tmpProject();
   const out = runCli(["audit", "--guards"], dir);
   assert.ok(out.length >= 0); // no runs.db — falls through to the normal audit path
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmProject(dir);
 });
