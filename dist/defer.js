@@ -39,8 +39,10 @@ const config_1 = require("./config");
  * KNOWN GAP (undetectable here, stated rather than papered over): Claude Code
  * also ignores defer when the model emitted several tool calls in one assistant
  * message ("defer is solo-only"), which nothing visible to a hook reveals. The
- * PostToolUse hook therefore reports any parked action that executed anyway as
- * a HOLD BREACH — detection where prevention isn't available.
+ * PostToolUse hook reports any parked action that executed anyway as a HOLD
+ * BREACH, but for an irreversible action that report arrives after the damage.
+ * That is why none of this runs unless the user opts in with holdTransport
+ * "auto" or "defer": the default is "deny", which always holds.
  */
 function canDefer(payload) {
     let mode;
@@ -48,13 +50,13 @@ function canDefer(payload) {
         mode = (0, config_1.loadConfig)(payload?.cwd || undefined).holdTransport;
     }
     catch {
-        mode = "auto";
+        mode = "deny";
     }
-    if (mode === "deny")
-        return false;
     if (mode === "defer")
         return true; // pinned by the user, evidence not consulted
-    return isPrintMode();
+    if (mode === "auto")
+        return isPrintMode();
+    return false; // "deny", or a value reins doesn't know: the transport that holds
 }
 /** Print-mode flags, per Claude Code's own startup check. */
 const PRINT_FLAGS = ["-p", "--print", "--init-only"];

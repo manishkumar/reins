@@ -102,8 +102,8 @@ async function runPostTool() {
 function recordBreach(cwd, sessionId, toolName, summary, inputHash, holdId) {
     const msg = `[reins] HOLD BREACH: ${toolName} (${(0, util_1.truncate)(summary, 80)}) executed while still ` +
         `parked for approval as ${holdId}. The defer/deny gate did not hold for this call — ` +
-        `see \`reins audit\`. Set holdTransport to "deny" in .reins/config.json to use the ` +
-        `transport that works everywhere.`;
+        `see \`reins audit\`. Set holdTransport back to "deny" (the default) in ` +
+        `.reins/config.json to use the transport that always holds.`;
     process.stderr.write(msg + "\n");
     try {
         const { openDb, insertDecision } = require("../db");

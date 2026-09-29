@@ -1,9 +1,12 @@
+import * as path from "node:path";
+import { resolveProjectDir } from "../paths";
 import {
   listPending,
   findPending,
   removePending,
   writeDecision,
   PendingAction,
+  proposalWorkdir,
 } from "../holds";
 import { appendSteering } from "../steering";
 import { summarizeToolInput, truncate, nowIso } from "../util";
@@ -36,6 +39,10 @@ export function cmdPending(): number {
         ` ${p.tool.padEnd(8)} ${truncate(summarizeToolInput(p.tool, p.input), 70)}` +
         ` ${c.dim(`[${p.rule_id}]`)}${mark}`,
     );
+    // The directory is part of what gets approved, so the approver sees it
+    // whenever it isn't simply the project root.
+    const where = workdirLabel(p.cwd);
+    if (where) console.log(`            ${c.dim("in " + where)}`);
   }
   console.log("");
   console.log(
@@ -53,6 +60,16 @@ export function cmdPending(): number {
     );
   }
   return 0;
+}
+
+/** Where a proposal was made, relative to the project when it is inside it.
+ *  Empty for the project root itself, and for entries that predate the field. */
+function workdirLabel(cwd: string | undefined): string {
+  if (!cwd) return "";
+  const rel = path.relative(proposalWorkdir(resolveProjectDir()), cwd);
+  if (rel === "") return "";
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return cwd;
+  return rel + path.sep;
 }
 
 /**
@@ -100,7 +117,7 @@ export function cmdApprove(args: string[]): number {
   try {
     appendSteering(
       `Your parked action ${found.id} (${found.tool}: ${truncate(summary, 120)}) is approved — ` +
-        `retry that exact call now, then continue.`,
+        `retry that exact call now, from the same working directory, then continue.`,
       undefined,
       found.session_id,
     );

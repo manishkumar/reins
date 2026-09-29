@@ -232,12 +232,48 @@ test("config holdTransport pins the transport, evidence or not", () => {
   assert.equal(decisionOf(runHook("pre-tool", pushEvent(deferred), deferred)), "defer");
 });
 
-test("a pre-0.4 allowance file is still honored (upgrading mid-run strands nothing)", () => {
+// With no config at all, even a run that IS print mode gets deny: defer can
+// still be dropped for a parallel call, so it is never chosen unasked. The
+// stand-in for Claude Code is a real process whose argv reads as print mode
+// (`node -p …`), so this exercises the actual ps path, not a mock.
+test("the default transport is deny, even with positive evidence of print mode", (t) => {
+  const standIn = require("node:child_process").spawn(
+    process.execPath,
+    ["-p", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" },
+  );
+  t.after(() => standIn.kill());
+  const env = { ...childEnv, CLAUDE_PID: String(standIn.pid) };
+  const hook = (dir) =>
+    execFileSync(process.execPath, [CLI, "hook", "pre-tool"], {
+      input: JSON.stringify(pushEvent(dir)),
+      cwd: dir,
+      encoding: "utf8",
+      env,
+    }).trim();
+
+  const dir = tmpProject();
+  fs.rmSync(path.join(dir, ".reins", "config.json"));
+  assert.equal(decisionOf(hook(dir)), "deny");
+
+  // Opting in with "auto" is what lets the same evidence choose defer. (No ps
+  // on Windows, where auto always answers deny.)
+  const optedIn = tmpProject("auto");
+  assert.equal(decisionOf(hook(optedIn)), process.platform === "win32" ? "deny" : "defer");
+});
+
+test("an unknown holdTransport value is treated as deny", () => {
+  const dir = tmpProject("sometimes");
+  assert.equal(decisionOf(runHook("pre-tool", pushEvent(dir), dir)), "deny");
+});
+
+test("a pre-0.4 unscoped allowance file is no longer honored", () => {
   const dir = tmpProject("deny");
-  // Park under the deny transport, the way reins < 0.4 did.
   runHook("pre-tool", pushEvent(dir, { toolUseId: "" }), dir);
   const parked = pendingEntries(dir)[0];
 
+  // The shape reins < 0.4 wrote: keyed by the bare input hash, so any session
+  // in any directory could spend it.
   fs.mkdirSync(path.join(dir, ".reins", "allowed"), { recursive: true });
   fs.writeFileSync(
     path.join(dir, ".reins", "allowed", parked.input_hash + ".json"),
@@ -252,7 +288,7 @@ test("a pre-0.4 allowance file is still honored (upgrading mid-run strands nothi
   );
 
   const out = runHook("pre-tool", pushEvent(dir, { toolUseId: "" }), dir);
-  assert.equal(decisionOf(out), "allow");
+  assert.equal(decisionOf(out), "deny");
 });
 
 test("post-tool flags a hold breach when a still-parked action executed anyway", () => {

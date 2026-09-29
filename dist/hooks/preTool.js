@@ -46,13 +46,16 @@ async function runPreTool() {
                 // The async gate. First: did a human already answer this proposal?
                 // A decision is one-shot and keyed either to this exact deferred call
                 // (tool_use_id — the replay of a parked call) or to this session's
-                // identical proposal (input hash — a retry after a deny-transport
-                // hold). Either way the human is never asked twice for one decision.
+                // identical proposal from the same directory (input hash + cwd — a
+                // retry after a deny-transport hold). Either way the human is never
+                // asked twice for one decision.
                 const inputHash = (0, util_1.hashToolInput)(toolName, toolInput);
+                const workdir = (0, holds_1.proposalWorkdir)(cwd);
                 const decided = (0, holds_1.consumeDecision)(cwd, {
                     tool_use_id: toolUseId,
                     session_id: sessionId,
                     input_hash: inputHash,
+                    cwd: workdir,
                 });
                 if (decided) {
                     if (decided.resolution === "approved") {
@@ -72,9 +75,10 @@ async function runPreTool() {
                 // transport — defer keeps Claude Code's own tool call alive so that
                 // approving later runs the ORIGINAL proposal; deny vetoes this attempt
                 // and asks the agent to retry after approval. defer is only honored in
-                // print mode and only for a solo tool call, so canDefer() decides, and
-                // when it cannot be sure the answer is deny — a hold that silently
-                // failed to hold would be the worst bug reins could ship.
+                // print mode and only for a solo tool call, and the second condition is
+                // invisible from here, so deny is the default and defer is opt-in (see
+                // canDefer) — a hold that silently failed to hold would be the worst
+                // bug reins could ship.
                 //
                 // The park is by file, not DB, so it holds even where capture can't
                 // run. Gate decisions bias CLOSED, alone in reins: if parking itself
@@ -87,6 +91,7 @@ async function runPreTool() {
                         tool: toolName,
                         input: toolInput,
                         input_hash: inputHash,
+                        cwd: workdir || undefined,
                         tool_use_id: toolUseId || undefined,
                         transport,
                         rule_id: match.rule.id,

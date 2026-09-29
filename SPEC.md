@@ -107,6 +107,7 @@ When a `hold` rule matches, the proposed action is written to `pending/<id>.json
   "tool": "Bash",
   "input": { "command": "npm publish" },   // the full proposal, verbatim
   "input_hash": "…",                       // stable hash of tool + input
+  "cwd": "/repo/packages/web",             // where the agent stood, symlinks resolved
   "tool_use_id": "toolu_01…",              // the harness's id, when it has one
   "transport": "defer",                    // "defer" | "deny" — see §8
   "rule_id": "publish-hold",
@@ -115,8 +116,10 @@ When a `hold` rule matches, the proposed action is written to `pending/<id>.json
 }
 ```
 
-The entry is what the human reviews, so `input` is stored complete and unabbreviated. An
-identical proposal from the same session does not create a second entry.
+The entry is what the human reviews, so `input` is stored complete and unabbreviated, and
+`cwd` is part of the proposal: the same command text in a different directory is a
+different action. An identical proposal from the same session and directory does not
+create a second entry.
 
 ## 6. Decisions
 
@@ -131,6 +134,7 @@ same rename-then-read discipline as steering:
   "steer": "open a PR instead",  // optional; for refusals
   "transport": "defer",
   "input_hash": "…",
+  "cwd": "/repo/packages/web",
   "tool_use_id": "toolu_01…",
   "rule_id": "publish-hold",
   "decided_ts": "2026-07-25T18:31:02.512Z"
@@ -140,8 +144,8 @@ same rename-then-read discipline as steering:
 `<key>` binds the answer to **one proposal**:
 
 - `u-<tool_use_id>` when the harness preserved the original call (transport `defer`);
-- `h-<session hash>-<input_hash>` otherwise, so an answer can only be spent by the session
-  it was given to, on the identical input.
+- `h-<session hash>-<cwd hash>-<input_hash>` otherwise, so an answer can only be spent by
+  the session it was given to, on the identical input, from the same directory.
 
 Two properties are load-bearing, and widening either is a security regression however
 convenient it looks:
@@ -183,7 +187,10 @@ Two transports implement `hold`:
   lets an identical retry through, which requires the agent to make one. Works anywhere.
 
 **Every degradation goes toward `deny`.** An implementation that cannot be sure a hold
-will be enforced must not emit it. This is the one place the convention biases closed: a
+will be enforced must not emit it. Evidence about the environment is not enough when the
+harness can still drop `defer` for reasons a hook cannot see (Claude Code ignores it for a
+call made in parallel with others), so reins uses `deny` by default and `defer` only when
+the user opts in. This is the one place the convention biases closed: a
 hold that silently fails to hold is worse than no hold at all, because a human believes an
 action is waiting for them when it has already run.
 
