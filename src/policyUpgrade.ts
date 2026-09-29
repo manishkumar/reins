@@ -22,6 +22,11 @@ export interface RuleChange {
   details: string[];
   before?: GuardRule;
   after: GuardRule;
+  /** The on-disk rule carried no `origin`, so "stale" and "you edited this"
+   *  are indistinguishable — the upgrade refreshes it and says so, rather than
+   *  freezing a possibly-stale safety rule on a guess. Only ever true on a
+   *  change the user gets to read before anything is written. */
+  unknownProvenance?: boolean;
 }
 
 export interface UpgradePlan {
@@ -31,10 +36,10 @@ export interface UpgradePlan {
   changes: RuleChange[];
   /** Rules with no counterpart in DEFAULT_RULES — hand-written, never touched. */
   userRuleIds: string[];
-  /** Shipped rules the user has since edited themselves. Detected by the file
-   *  already being at the current generation while its content differs: nothing
-   *  new has shipped, so the difference can only have come from them. Left
-   *  alone, and reported so the divergence isn't invisible. */
+  /** Shipped rules the user has since edited themselves. Detected per rule: the
+   *  rule's own `origin` says it was written at the current generation, yet its
+   *  content differs — nothing new has shipped, so the difference came from
+   *  them. Left alone, and reported so the divergence isn't invisible. */
   customizedRuleIds: string[];
   /** The full rule list as it would be written. Only meaningful when applying. */
   nextRules: GuardRule[];
@@ -53,6 +58,23 @@ export function seededDefaults(): GuardRule[] {
 function isDefaultRule(rule: GuardRule, defaultIds: Set<string>): boolean {
   if (typeof rule.origin === "string") return rule.origin.startsWith("default@");
   return defaultIds.has(rule.id);
+}
+
+/**
+ * Which generation wrote THIS RULE's body, or null if the rule can't say.
+ *
+ * Staleness is a property of a rule, not of the file it lives in — and reading
+ * it off the file is what froze real installs. `saveGuards` used to stamp any
+ * unversioned file with the current generation, so a repo could sit at "v2"
+ * carrying June's rule bodies; the file-level check then read that stamp,
+ * concluded nothing new had shipped, and filed every stale rule under "the user
+ * customized this" — permanently, since the version could never fall behind
+ * again. Asking the rule instead makes that state self-healing: a body with no
+ * origin, or an older one, is stale no matter what the file claims.
+ */
+function ruleGeneration(rule: GuardRule): number | null {
+  const m = /^default@(\d+)$/.exec(rule.origin ?? "");
+  return m ? Number(m[1]) : null;
 }
 
 function sameStringArray(a?: string[], b?: string[]): boolean {
@@ -112,11 +134,6 @@ export function planUpgrade(file: GuardsFile): UpgradePlan {
   const changes: RuleChange[] = [];
   const customizedRuleIds: string[] = [];
   const next: GuardRule[] = [...file.rules];
-  // Already at the shipped generation? Then nothing new has been published, so
-  // any content difference in a shipped rule came from the user. Refreshing it
-  // would silently undo their edit — the exact clobber this module refuses to
-  // do. New rules still get offered; existing ones are left as written.
-  const atCurrentGeneration = file.version === POLICY_VERSION;
 
   for (let i = 0; i < DEFAULT_RULES.length; i++) {
     const shipped = DEFAULT_RULES[i];
@@ -147,9 +164,12 @@ export function planUpgrade(file: GuardsFile): UpgradePlan {
     const { next: merged, details } = mergeRule(current, shipped);
     const substantive = details.filter((d) => !d.startsWith("keeping your"));
 
-    if (substantive.length > 0 && atCurrentGeneration) {
-      customizedRuleIds.push(shipped.id); // their edit, not our staleness
-      continue; // leave next[at] exactly as the user wrote it
+    // Content differs, and the rule itself says it was written at the current
+    // generation: nothing has shipped since, so the difference is the user's
+    // edit. Left exactly as they wrote it, and reported so it isn't invisible.
+    if (substantive.length > 0 && ruleGeneration(current) === POLICY_VERSION) {
+      customizedRuleIds.push(shipped.id);
+      continue;
     }
 
     next[at] = merged;
@@ -159,6 +179,7 @@ export function planUpgrade(file: GuardsFile): UpgradePlan {
       details,
       before: current,
       after: merged,
+      unknownProvenance: substantive.length > 0 && ruleGeneration(current) === null,
     });
   }
 
@@ -187,6 +208,11 @@ export function stalenessNote(plan: UpgradePlan): string | null {
   const parts: string[] = [];
   if (updated > 0) parts.push(`${updated} rule${updated === 1 ? "" : "s"} changed upstream`);
   if (added > 0) parts.push(`${added} new rule${added === 1 ? "" : "s"} available`);
-  const from = plan.fromVersion === undefined ? "pre-versioning" : `v${plan.fromVersion}`;
-  return `${parts.join(", ")} (${from} → v${plan.toVersion}) — run \`reins policy upgrade\``;
+  // "v2 → v2" reads like a no-op, which is precisely the case worth naming: the
+  // file is stamped current while its rule bodies are not. Say that instead.
+  const where =
+    plan.fromVersion === plan.toVersion
+      ? `stamped v${plan.toVersion}, rule bodies older`
+      : `${plan.fromVersion === undefined ? "pre-versioning" : `v${plan.fromVersion}`} → v${plan.toVersion}`;
+  return `${parts.join(", ")} (${where}) — run \`reins policy upgrade\``;
 }

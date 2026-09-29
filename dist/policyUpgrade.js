@@ -31,6 +31,22 @@ function isDefaultRule(rule, defaultIds) {
         return rule.origin.startsWith("default@");
     return defaultIds.has(rule.id);
 }
+/**
+ * Which generation wrote THIS RULE's body, or null if the rule can't say.
+ *
+ * Staleness is a property of a rule, not of the file it lives in — and reading
+ * it off the file is what froze real installs. `saveGuards` used to stamp any
+ * unversioned file with the current generation, so a repo could sit at "v2"
+ * carrying June's rule bodies; the file-level check then read that stamp,
+ * concluded nothing new had shipped, and filed every stale rule under "the user
+ * customized this" — permanently, since the version could never fall behind
+ * again. Asking the rule instead makes that state self-healing: a body with no
+ * origin, or an older one, is stale no matter what the file claims.
+ */
+function ruleGeneration(rule) {
+    const m = /^default@(\d+)$/.exec(rule.origin ?? "");
+    return m ? Number(m[1]) : null;
+}
 function sameStringArray(a, b) {
     const x = a ?? [];
     const y = b ?? [];
@@ -86,11 +102,6 @@ function planUpgrade(file) {
     const changes = [];
     const customizedRuleIds = [];
     const next = [...file.rules];
-    // Already at the shipped generation? Then nothing new has been published, so
-    // any content difference in a shipped rule came from the user. Refreshing it
-    // would silently undo their edit — the exact clobber this module refuses to
-    // do. New rules still get offered; existing ones are left as written.
-    const atCurrentGeneration = file.version === guards_1.POLICY_VERSION;
     for (let i = 0; i < guards_1.DEFAULT_RULES.length; i++) {
         const shipped = guards_1.DEFAULT_RULES[i];
         const at = next.findIndex((r) => r.id === shipped.id);
@@ -117,9 +128,12 @@ function planUpgrade(file) {
             continue;
         const { next: merged, details } = mergeRule(current, shipped);
         const substantive = details.filter((d) => !d.startsWith("keeping your"));
-        if (substantive.length > 0 && atCurrentGeneration) {
-            customizedRuleIds.push(shipped.id); // their edit, not our staleness
-            continue; // leave next[at] exactly as the user wrote it
+        // Content differs, and the rule itself says it was written at the current
+        // generation: nothing has shipped since, so the difference is the user's
+        // edit. Left exactly as they wrote it, and reported so it isn't invisible.
+        if (substantive.length > 0 && ruleGeneration(current) === guards_1.POLICY_VERSION) {
+            customizedRuleIds.push(shipped.id);
+            continue;
         }
         next[at] = merged;
         changes.push({
@@ -128,6 +142,7 @@ function planUpgrade(file) {
             details,
             before: current,
             after: merged,
+            unknownProvenance: substantive.length > 0 && ruleGeneration(current) === null,
         });
     }
     const userRuleIds = file.rules.filter((r) => !isDefaultRule(r, defaultIds)).map((r) => r.id);
@@ -155,6 +170,10 @@ function stalenessNote(plan) {
         parts.push(`${updated} rule${updated === 1 ? "" : "s"} changed upstream`);
     if (added > 0)
         parts.push(`${added} new rule${added === 1 ? "" : "s"} available`);
-    const from = plan.fromVersion === undefined ? "pre-versioning" : `v${plan.fromVersion}`;
-    return `${parts.join(", ")} (${from} → v${plan.toVersion}) — run \`reins policy upgrade\``;
+    // "v2 → v2" reads like a no-op, which is precisely the case worth naming: the
+    // file is stamped current while its rule bodies are not. Say that instead.
+    const where = plan.fromVersion === plan.toVersion
+        ? `stamped v${plan.toVersion}, rule bodies older`
+        : `${plan.fromVersion === undefined ? "pre-versioning" : `v${plan.fromVersion}`} → v${plan.toVersion}`;
+    return `${parts.join(", ")} (${where}) — run \`reins policy upgrade\``;
 }

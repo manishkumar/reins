@@ -128,6 +128,15 @@ function printPlan(plan: UpgradePlan): void {
     if (change.kind === "added") {
       console.log(c.dim(`      ${change.after.reason}`));
     }
+    if (change.unknownProvenance) {
+      // No `origin` on the on-disk rule, so reins cannot tell a rule that is
+      // merely old from one you re-tuned by hand. It refreshes rather than
+      // freezes — a stale safety rule that can never be fixed is the worse
+      // failure — but you get the diff first, and a way to opt out for good.
+      console.log(
+        c.dim(`      (no origin recorded — if this pattern is yours, add "origin": "user" to keep it)`),
+      );
+    }
   }
 
   const unchanged = plan.changes.filter((ch) => ch.kind === "unchanged").length;
