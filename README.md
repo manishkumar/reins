@@ -367,8 +367,10 @@ Summary
 </p>
 
 - **NEEDS YOU**, top left: every held action, plus hold breaches and worked-around guards from the last 7 days. It reads from `.reins/pending/` and the bypass ledger, so it works without SQLite.
-- **AGENTS**, below: each session's live status (`active` / `looping` / `idle` / `done`), a sparkline of its calls over the last 12 minutes, and its last call, queued steer, or held action. Status comes from recent tool activity, not the per-turn Stop hook, so an agent mid-conversation reads `active`. `looping` means the same call several times in a row, as the loop alarm counts it.
-- **Detail**, right: for a hold, the rule, reason, session, directory, transport, and the **full proposed input**. For an agent, its activity and trajectory, newest first. `⏎` zooms it to full screen.
+- **AGENTS**, below: each session leads with what it is about, then its live status (`active` / `looping` / `idle` / `done`) and a sparkline of its calls over the last 12 minutes. The second line has the name and short id you address it by, its git branch, and the last prompt you sent it. The third has its last call, queued steer, or held action. Status comes from recent tool activity, not the per-turn Stop hook, so an agent mid-conversation reads `active`. `looping` means the same call several times in a row, as the loop alarm counts it.
+- **Detail**, right: for a hold, the rule, reason, session, the prompt that session was last given, directory, transport, and the **full proposed input**. For an agent, its branch, last prompt, activity and trajectory, newest first. `⏎` zooms it to full screen.
+
+**Where a session's title comes from.** A name set with `reins name` leads. Otherwise the cockpit shows the title Claude Code gave the session (the one in its own session list, or the one you set with `/rename`), read from the tail of the session transcript along with the branch and last prompt. Without a transcript the `brave-otter` mnemonic leads, as before. The caveats: the transcript format is not a documented interface, so a Claude Code update can turn titles back into mnemonics until reins catches up. The path is recorded by capture, so titles need SQLite (Node ≥ 22.5), and a session shows its title after its first completed tool call under this version. Claude Code titles a session early, so a long session's title can describe where it started. The last prompt is the current one. The title, branch and prompt are display only. `reins steer` still takes the id, the mnemonic or your custom name, and no guard or hold reads them.
 
 | key | does |
 |---|---|
@@ -389,7 +391,7 @@ Summary
 
 When a new hold arrives, the header flashes and the terminal bell rings. iTerm2, WezTerm and Ghostty also get a desktop notification. `--quiet` turns off the bell and notification. **The selection never moves on its own**, because a list that reorders under your cursor is how the wrong thing gets approved. Steering from the cockpit appends to what's already queued, like `reins steer`, so a queued nudge is never overwritten.
 
-Text from agent runs (commands, paths, steering) is untrusted, and control characters are stripped before it reaches your terminal. Otherwise a command containing escape sequences could set your clipboard or draw over the approve dialog.
+Text from agent runs (commands, paths, steering, session titles and prompts) is untrusted, and control characters are stripped before it reaches your terminal. Otherwise a command containing escape sequences could set your clipboard or draw over the approve dialog.
 
 Nothing listens on a port: the only way in is the keyboard of whoever started it. That's why approving lives here and not in `reins report`. Tune the refresh with `reins watch -n 1` (seconds). Piped or with `--once`, it prints one plain snapshot, including the `reins approve` / `reins deny` command for each hold, so it works in scripts. No TUI library and no daemon: raw ANSI on the terminal you already have, and it needs at least 60×14.
 

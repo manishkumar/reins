@@ -252,7 +252,7 @@ function selected(st, lines, on, iw, tone = "accent") {
 function holdItem(h, m, st, iw, on) {
     const p = h.action;
     const age = ago(m.nowMs - Date.parse(p.ts));
-    const l1 = lr(st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold((0, term_1.clean)(p.tool))) + "  " + st.dim((0, term_1.clean)(p.rule_id)), st.dim(`${(0, term_1.clean)(h.sessionName)} · `) + st.fg("warn", age), iw - 1);
+    const l1 = lr(st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold((0, term_1.clean)(p.tool))) + "  " + st.dim((0, term_1.clean)(p.rule_id)), st.dim(`${clip((0, term_1.clean)(h.sessionLabel ?? h.sessionName), Math.floor(iw / 2) - 6)} · `) + st.fg("warn", age), iw - 1);
     const first = (0, term_1.clean)(h.input).replace(/\s+/g, " ").trim();
     const l2 = "  " + st.fg("text", first);
     return selected(st, [l1, l2], on, iw, "warn");
@@ -278,21 +278,35 @@ function agentItem(a, m, st, iw, on) {
     const spark = st.fg(lv === "active" || lv === "looping" ? "accent" : "faint", (0, term_1.sparkline)(a.spark.slice(-12)));
     const l1 = lr(st.fg(L.tone, L.glyph) +
         " " +
-        st.fg("text", st.bold((0, term_1.clean)(a.name))) +
-        " " +
-        st.dim(a.id.slice(0, 8)) +
+        st.fg("text", st.bold((0, term_1.clean)(a.label ?? a.name))) +
         "  " +
         st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label), spark + " " + st.dim(`${a.calls}`.padStart(4)), iw - 1);
-    let l2;
+    // Who it is and what it was asked: the mnemonic and short id are how you
+    // address it, the branch and prompt are how you recognise it.
+    const l2 = "  " +
+        st.dim((a.label ?? a.name) === a.name ? a.id.slice(0, 8) : `${(0, term_1.clean)(a.name)} ${a.id.slice(0, 8)}`) +
+        (a.branch ? st.fg("faint", " · ") + st.fg("accent", "⎇ " + (0, term_1.clean)(a.branch)) : "") +
+        (a.asked ? st.fg("faint", " · ") + st.dim("❯ " + (0, term_1.clean)(a.asked)) : "");
+    let l3;
     if (a.holds)
-        l2 = "  " + st.fg("warn", `◆ ${a.holds} held, waiting on you`);
+        l3 = "  " + st.fg("warn", `◆ ${a.holds} held, waiting on you`);
     else if (a.steerQueued)
-        l2 = "  " + st.fg("violet", "✎ steer queued: ") + st.dim((0, term_1.clean)(a.steerQueued).replace(/\s+/g, " "));
+        l3 = "  " + st.fg("violet", "✎ steer queued: ") + st.dim((0, term_1.clean)(a.steerQueued).replace(/\s+/g, " "));
     else {
         const last = a.trajectory[a.trajectory.length - 1];
-        l2 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
+        l3 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
     }
-    return selected(st, [l1, l2], on, iw);
+    return selected(st, [l1, l2, l3], on, iw);
+}
+/** How a session is named in a detail line: its label, then the name and id that address it. */
+function sessionLine(label, name, id) {
+    const l = (0, term_1.clean)(label ?? name);
+    const n = (0, term_1.clean)(name);
+    return l === n ? `${n} (${id.slice(0, 8)})` : `${l} · ${n} (${id.slice(0, 8)})`;
+}
+function clip(s, cols) {
+    const max = Math.max(8, cols);
+    return (0, term_1.width)(s) <= max ? s : (0, term_1.fit)(s, max - 1).trimEnd() + "…";
 }
 const KIND = {
     ok: { glyph: "›", tone: "muted" },
@@ -352,7 +366,7 @@ function detailContent(m, st, row, iw) {
     if (row.kind === "agent") {
         const a = m.agents.find((x) => x.id === row.id);
         if (a)
-            return { title: `AGENT · ${(0, term_1.clean)(a.name)}`, tone: "accent", lines: agentDetail(a, m, st, iw) };
+            return { title: `AGENT · ${clip((0, term_1.clean)(a.label ?? a.name), iw - 12)}`, tone: "accent", lines: agentDetail(a, m, st, iw) };
     }
     return { title: "DETAIL", tone: "accent", lines: [st.dim("(gone)")] };
 }
@@ -376,7 +390,8 @@ function holdDetail(h, m, st, iw) {
     const out = [
         ...kv(st, "rule", (0, term_1.clean)(p.rule_id), iw, "warn"),
         ...kv(st, "reason", (0, term_1.clean)(p.reason), iw),
-        ...kv(st, "session", `${(0, term_1.clean)(h.sessionName)} (${p.session_id.slice(0, 8)})`, iw),
+        ...kv(st, "session", sessionLine(h.sessionLabel, h.sessionName, p.session_id), iw),
+        ...(h.asked ? kv(st, "asked", (0, term_1.clean)(h.asked), iw, "muted") : []),
         ...kv(st, "directory", h.where ? (0, term_1.clean)(h.where) : "project root", iw),
         ...kv(st, "waiting", `${waited} (since ${new Date(p.ts).toLocaleString()})`, iw),
         ...kv(st, "transport", p.transport === "defer"
@@ -412,7 +427,9 @@ function agentDetail(a, m, st, iw) {
     const L = LIVE[lv];
     const out = [
         ...kv(st, "status", `${L.glyph} ${L.label}${lv !== "active" && a.lastTsMs != null ? `, last call ${ago(m.nowMs - a.lastTsMs)} ago` : ""}`, iw, L.tone),
-        ...kv(st, "session", a.id, iw, "muted"),
+        ...kv(st, "session", `${(0, term_1.clean)(a.name)} · ${a.id}`, iw, "muted"),
+        ...(a.branch ? kv(st, "branch", (0, term_1.clean)(a.branch), iw, "accent") : []),
+        ...(a.asked ? kv(st, "asked", (0, term_1.clean)(a.asked), iw) : []),
         ...kv(st, "calls", String(a.calls) + (a.startedMs != null ? ` since ${new Date(a.startedMs).toLocaleString()}` : ""), iw),
     ];
     if (a.streak > 1) {
@@ -458,7 +475,7 @@ function approveBody(m, ui, st, holdId) {
     const lines = [
         ...kv(st, "rule", (0, term_1.clean)(p.rule_id), iw, "warn"),
         ...kv(st, "reason", (0, term_1.clean)(p.reason), iw),
-        ...kv(st, "session", `${(0, term_1.clean)(hv.sessionName)} (${p.session_id.slice(0, 8)})`, iw),
+        ...kv(st, "session", sessionLine(hv.sessionLabel, hv.sessionName, p.session_id), iw),
         ...kv(st, "directory", hv.where ? (0, term_1.clean)(hv.where) : "project root", iw),
         "",
         rule(st, `${(0, term_1.clean)(p.tool)} · the exact input you are approving`, iw),
@@ -509,7 +526,7 @@ function modalBox(m, ui, st) {
     }
     if (md.kind === "steer") {
         const a = md.target ? m.agents.find((x) => x.id === md.target) : null;
-        const who = md.target ? `${(0, term_1.clean)(a?.name ?? md.target.slice(0, 8))} (${md.target.slice(0, 8)})` : "every agent (broadcast)";
+        const who = md.target ? (a ? sessionLine(a.label, a.name, a.id) : md.target.slice(0, 8)) : "every agent (broadcast)";
         const queued = md.target ? a?.steerQueued : m.broadcast;
         const body = [
             st.fg("violet", st.bold("Steer ")) + st.fg("text", st.bold(who)),
@@ -560,7 +577,7 @@ function renderSnapshot(m, st, W) {
     out.push(st.bold(needs ? `NEEDS YOU (${needs})` : "NEEDS YOU — nothing waiting"));
     for (const h of m.holds) {
         const p = h.action;
-        out.push(`  ◆ ${p.id}  ${(0, term_1.clean)(p.tool)}  [${(0, term_1.clean)(p.rule_id)}]  ${(0, term_1.clean)(h.sessionName)}  waiting ${ago(m.nowMs - Date.parse(p.ts))}`);
+        out.push(`  ◆ ${p.id}  ${(0, term_1.clean)(p.tool)}  [${(0, term_1.clean)(p.rule_id)}]  ${(0, term_1.clean)(h.sessionLabel ?? h.sessionName)}  waiting ${ago(m.nowMs - Date.parse(p.ts))}`);
         out.push("    " + (0, term_1.fit)((0, term_1.clean)(h.input).replace(/\s+/g, " "), Math.max(20, W - 6)).trimEnd());
         out.push(st.dim(`    reins approve ${p.id}   reins deny ${p.id}`));
     }
@@ -579,6 +596,9 @@ function renderSnapshot(m, st, W) {
             const last = a.trajectory[a.trajectory.length - 1];
             const since = a.lastTsMs != null ? ` ${ago(m.nowMs - a.lastTsMs)}` : "";
             out.push(`  ${LIVE[lv].glyph} ${(0, term_1.clean)(a.name).padEnd(16)} ${a.id.slice(0, 8)}  ${(lv + since).padEnd(12)} ${String(a.calls).padStart(4)} calls`);
+            const about = [a.label && a.label !== a.name ? (0, term_1.clean)(a.label) : "", a.branch ? "⎇ " + (0, term_1.clean)(a.branch) : "", a.asked ? "❯ " + (0, term_1.clean)(a.asked) : ""].filter(Boolean);
+            if (about.length)
+                out.push("      " + (0, term_1.fit)(about.join(" · "), Math.max(20, W - 8)).trimEnd());
             if (a.steerQueued)
                 out.push(`      ✎ steer queued: ${(0, term_1.fit)((0, term_1.clean)(a.steerQueued), Math.max(20, W - 24)).trimEnd()}`);
             if (last)

@@ -79,7 +79,7 @@ async function runStop() {
         const db = openDb(cwd);
         if (!db)
             return; // no SQLite backend — nothing to finalize
-        upsertSessionStart(db, sessionId, (0, paths_1.resolveProjectDir)(cwd), (0, util_1.nowIso)());
+        upsertSessionStart(db, sessionId, (0, paths_1.resolveProjectDir)(cwd), (0, util_1.nowIso)(), transcriptPath);
         const totals = (0, transcript_1.readTranscriptTotals)(transcriptPath);
         finalizeSession(db, sessionId, (0, util_1.nowIso)(), outcome, totals.totalTokens, totals.totalCost);
         // gate_result: if the run ends with actions still parked in the hold

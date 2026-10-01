@@ -388,3 +388,94 @@ test("renderSnapshot: piped output lists holds with the commands to answer them"
   assert.match(out, /brave-otter/);
   assert.ok(!out.includes("\x1b"), "no styling when piped");
 });
+
+/* ------------------------------------------------- what a session is about */
+
+const { parseTail, readSessionContext } = require("../dist/sessionContext.js");
+const { execFileSync } = require("node:child_process");
+const CLI = path.join(__dirname, "..", "dist", "cli.js");
+
+const line = (o) => JSON.stringify(o);
+
+test("parseTail: the newest title and prompt win, and /rename beats the generated title", () => {
+  const ctx = parseTail(
+    [
+      line({ type: "ai-title", aiTitle: "Old title" }),
+      line({ type: "last-prompt", lastPrompt: "first ask" }),
+      line({ type: "user", gitBranch: "main", message: { content: "hi" } }),
+      line({ type: "ai-title", aiTitle: "Cockpit session names" }),
+      line({ type: "last-prompt", lastPrompt: "make the names\nreadable" }),
+      line({ type: "assistant", gitBranch: "feat/watch-cockpit" }),
+    ].join("\n"),
+  );
+  assert.deepStrictEqual(ctx, { title: "Cockpit session names", asked: "make the names readable", branch: "feat/watch-cockpit" });
+
+  const renamed = parseTail([line({ type: "custom-title", customTitle: "Auth refactor" }), line({ type: "ai-title", aiTitle: "Later generated" })].join("\n"));
+  assert.strictEqual(renamed.title, "Auth refactor");
+});
+
+test("parseTail: a tool result that quotes a title line is not a title", () => {
+  const quoted = line({ type: "user", message: { content: line({ type: "ai-title", aiTitle: "Injected", gitBranch: "evil" }) } });
+  assert.deepStrictEqual(parseTail(quoted + "\nnot json\n"), { title: null, asked: null, branch: null });
+});
+
+test("readSessionContext: reads the tail of a large transcript; anything unreadable is empty", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reins-ctx-"));
+  try {
+    const file = path.join(dir, "s.jsonl");
+    const big = line({ type: "user", message: { content: "x".repeat(400_000) } });
+    fs.writeFileSync(file, [line({ type: "ai-title", aiTitle: "Stale" }), big, line({ type: "ai-title", aiTitle: "Fresh" })].join("\n") + "\n");
+    assert.strictEqual(readSessionContext(file).title, "Fresh");
+    assert.strictEqual(readSessionContext(path.join(dir, "missing.jsonl")).title, null);
+    assert.strictEqual(readSessionContext(dir).title, null);
+    fs.writeFileSync(path.join(dir, "notes.txt"), line({ type: "ai-title", aiTitle: "Not a transcript" }));
+    assert.strictEqual(readSessionContext(path.join(dir, "notes.txt")).title, null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildWatchModel: a session leads with its transcript title; the mnemonic still addresses it", () => {
+  const { getDriver } = require("../dist/store.js");
+  if (!getDriver()) return; // no SQLite backend on this Node: capture disabled, skip
+  const { openDbReadOnly } = require("../dist/db.js");
+  const dir = tmpProject();
+  let db = null;
+  try {
+    const transcript = path.join(dir, "t.jsonl");
+    fs.writeFileSync(
+      transcript,
+      [line({ type: "ai-title", aiTitle: "Publish the 0.5 release" }), line({ type: "last-prompt", lastPrompt: "cut the release" }), line({ type: "user", gitBranch: "release/0.5.0" })].join("\n") + "\n",
+    );
+    const sid = "sess-1";
+    execFileSync(process.execPath, [CLI, "hook", "post-tool"], {
+      cwd: dir,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+      input: JSON.stringify({ session_id: sid, cwd: dir, transcript_path: transcript, tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: {} }),
+    });
+    park(dir, { session_id: sid });
+    db = inProject(dir, () => openDbReadOnly(dir));
+    const m = buildWatchModel(db, dir, 3);
+    const a = m.agents[0];
+    assert.strictEqual(a.label, "Publish the 0.5 release");
+    assert.match(a.name, /^[a-z]+-[a-z]+$/, "the steer-able name is still the mnemonic");
+    assert.strictEqual(a.asked, "cut the release");
+    assert.strictEqual(a.branch, "release/0.5.0");
+    assert.strictEqual(m.holds[0].sessionLabel, "Publish the 0.5 release");
+
+    const screen = R.renderScreen(m, ui({ width: 140, height: 30 }), plain).join("\n");
+    assert.match(screen, /Publish the 0\.5 release/);
+    assert.match(screen, /⎇ release\/0\.5\.0/);
+    assert.match(screen, /❯ cut the release/);
+    assert.ok(screen.includes(a.name), "the mnemonic is still on screen");
+  } finally {
+    if (db) db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("renderScreen: a session with no transcript shows its mnemonic, as before", () => {
+  const out = R.renderScreen(model({}), ui({ width: 140, height: 30 }), plain).join("\n");
+  assert.match(out, /brave-otter/);
+  assert.match(out, /3b9f2a1c/);
+});

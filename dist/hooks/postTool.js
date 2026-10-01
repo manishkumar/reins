@@ -24,7 +24,7 @@ async function runPostTool() {
         const { openDb, upsertSessionStart, insertToolCall, countTrailingSameHash, } = require("../db");
         const db = sessionId ? openDb(cwd) : null; // no real session => don't record
         if (db) {
-            upsertSessionStart(db, sessionId, (0, paths_1.resolveProjectDir)(cwd), (0, util_1.nowIso)());
+            upsertSessionStart(db, sessionId, (0, paths_1.resolveProjectDir)(cwd), (0, util_1.nowIso)(), payload.transcript_path || undefined);
             insertToolCall(db, {
                 session_id: sessionId,
                 tool: toolName,

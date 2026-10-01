@@ -39,6 +39,7 @@ exports.liveness = liveness;
 const path = __importStar(require("node:path"));
 const db_1 = require("../db");
 const names_1 = require("../names");
+const sessionContext_1 = require("../sessionContext");
 const holds_1 = require("../holds");
 const holdActions_1 = require("../holdActions");
 const attention_1 = require("../attention");
@@ -60,13 +61,21 @@ const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)
 function buildWatchModel(db, repo, threshold, o = {}) {
     const nowMs = o.nowMs ?? Date.now();
     const agents = db ? readAgents(db, threshold, nowMs, o) : [];
-    const names = new Map(agents.map((a) => [a.id, a.name]));
+    const known = new Map(agents.map((a) => [a.id, a]));
+    const faceOf = (id) => {
+        let f = known.get(id);
+        if (!f)
+            known.set(id, (f = db ? readFace(db, id) : face(id, null, null)));
+        return f;
+    };
     const pending = (0, holds_1.listPending)(repo);
     const superseded = (0, holdActions_1.supersededDeferIds)(pending);
     const root = (0, holds_1.proposalWorkdir)(repo);
     const holds = pending.map((p) => ({
         action: p,
-        sessionName: names.get(p.session_id) ?? (0, names_1.displayName)(p.session_id),
+        sessionName: faceOf(p.session_id).name,
+        sessionLabel: faceOf(p.session_id).label,
+        asked: faceOf(p.session_id).asked,
         input: (0, attention_1.describeInput)(p),
         where: whereLabel(root, p.cwd),
         superseded: superseded.has(p.id),
@@ -93,12 +102,30 @@ function buildWatchModel(db, repo, threshold, o = {}) {
         broadcast,
     };
 }
+/** How a session is shown. The transcript supplies the title; without one the mnemonic leads. */
+function face(id, custom, transcript) {
+    const ctx = (0, sessionContext_1.readSessionContext)(transcript);
+    const name = (0, names_1.displayName)(id, custom);
+    return { name, label: (custom ?? "").trim() || ctx.title || name, asked: ctx.asked, branch: ctx.branch };
+}
+/** A hold's session can be older than the agent list reaches; look it up on its own. */
+function readFace(db, id) {
+    try {
+        const cols = [(0, db_1.hasSessionNameColumn)(db) ? "name" : "NULL AS name", (0, db_1.hasSessionTranscriptColumn)(db) ? "transcript" : "NULL AS transcript"];
+        const r = db.prepare(`SELECT ${cols.join(", ")} FROM sessions WHERE id = ?`).get(id);
+        return face(id, r?.name, r?.transcript);
+    }
+    catch {
+        return face(id, null, null);
+    }
+}
 function readAgents(db, threshold, nowMs, o) {
     const out = [];
     try {
         const hasName = (0, db_1.hasSessionNameColumn)(db);
+        const hasTranscript = (0, db_1.hasSessionTranscriptColumn)(db);
         const rows = db
-            .prepare(`SELECT s.id, ${hasName ? "s.name, " : ""}s.ended, s.final_outcome, s.started,
+            .prepare(`SELECT s.id, ${hasName ? "s.name, " : ""}${hasTranscript ? "s.transcript, " : ""}s.ended, s.final_outcome, s.started,
                 COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
            FROM sessions s
            LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -136,7 +163,7 @@ function readAgents(db, threshold, nowMs, o) {
             const last = r.last_ts || r.started;
             out.push({
                 id: r.id,
-                name: (0, names_1.displayName)(r.id, r.name),
+                ...face(r.id, r.name, r.transcript),
                 ended: !!r.ended,
                 outcome: r.final_outcome,
                 calls: r.calls,

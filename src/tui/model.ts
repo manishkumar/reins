@@ -1,7 +1,8 @@
 import * as path from "node:path";
 import type { SqlDb } from "../store";
-import { hasSessionNameColumn } from "../db";
+import { hasSessionNameColumn, hasSessionTranscriptColumn } from "../db";
 import { displayName } from "../names";
+import { readSessionContext } from "../sessionContext";
 import { listPending, proposalWorkdir, type PendingAction } from "../holds";
 import { supersededDeferIds } from "../holdActions";
 import { collectAttention, describeInput, type AttentionEvent } from "../attention";
@@ -38,7 +39,13 @@ export type Liveness = "active" | "looping" | "idle" | "done";
 
 export interface AgentView {
   id: string;
+  /** The name `reins steer` accepts: the custom one, else the mnemonic. */
   name: string;
+  /** What the row leads with: the custom name, else the session's title, else the mnemonic. */
+  label: string;
+  /** The human's most recent prompt, from the transcript. */
+  asked: string | null;
+  branch: string | null;
   ended: boolean;
   outcome: string | null;
   calls: number;
@@ -57,6 +64,9 @@ export interface AgentView {
 export interface HoldView {
   action: PendingAction;
   sessionName: string;
+  /** As AgentView.label, for the session that proposed the action. */
+  sessionLabel: string;
+  asked: string | null;
   /** The full proposed input, as the approver will read it. */
   input: string;
   /** Working directory relative to the project, "" for the root. */
@@ -90,14 +100,21 @@ const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)
 export function buildWatchModel(db: SqlDb | null, repo: string, threshold: number, o: BuildOpts = {}): WatchModel {
   const nowMs = o.nowMs ?? Date.now();
   const agents = db ? readAgents(db, threshold, nowMs, o) : [];
-  const names = new Map(agents.map((a) => [a.id, a.name]));
+  const known = new Map<string, SessionFace>(agents.map((a) => [a.id, a]));
+  const faceOf = (id: string): SessionFace => {
+    let f = known.get(id);
+    if (!f) known.set(id, (f = db ? readFace(db, id) : face(id, null, null)));
+    return f;
+  };
 
   const pending = listPending(repo);
   const superseded = supersededDeferIds(pending);
   const root = proposalWorkdir(repo);
   const holds: HoldView[] = pending.map((p) => ({
     action: p,
-    sessionName: names.get(p.session_id) ?? displayName(p.session_id),
+    sessionName: faceOf(p.session_id).name,
+    sessionLabel: faceOf(p.session_id).label,
+    asked: faceOf(p.session_id).asked,
     input: describeInput(p),
     where: whereLabel(root, p.cwd),
     superseded: superseded.has(p.id),
@@ -126,13 +143,36 @@ export function buildWatchModel(db: SqlDb | null, repo: string, threshold: numbe
   };
 }
 
+type SessionFace = Pick<AgentView, "name" | "label" | "asked" | "branch">;
+
+/** How a session is shown. The transcript supplies the title; without one the mnemonic leads. */
+function face(id: string, custom: string | null | undefined, transcript: string | null | undefined): SessionFace {
+  const ctx = readSessionContext(transcript);
+  const name = displayName(id, custom);
+  return { name, label: (custom ?? "").trim() || ctx.title || name, asked: ctx.asked, branch: ctx.branch };
+}
+
+/** A hold's session can be older than the agent list reaches; look it up on its own. */
+function readFace(db: SqlDb, id: string): SessionFace {
+  try {
+    const cols = [hasSessionNameColumn(db) ? "name" : "NULL AS name", hasSessionTranscriptColumn(db) ? "transcript" : "NULL AS transcript"];
+    const r = db.prepare(`SELECT ${cols.join(", ")} FROM sessions WHERE id = ?`).get(id) as
+      | { name: string | null; transcript: string | null }
+      | undefined;
+    return face(id, r?.name, r?.transcript);
+  } catch {
+    return face(id, null, null);
+  }
+}
+
 function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): AgentView[] {
   const out: AgentView[] = [];
   try {
     const hasName = hasSessionNameColumn(db);
+    const hasTranscript = hasSessionTranscriptColumn(db);
     const rows = db
       .prepare(
-        `SELECT s.id, ${hasName ? "s.name, " : ""}s.ended, s.final_outcome, s.started,
+        `SELECT s.id, ${hasName ? "s.name, " : ""}${hasTranscript ? "s.transcript, " : ""}s.ended, s.final_outcome, s.started,
                 COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
            FROM sessions s
            LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -143,6 +183,7 @@ function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): 
       .all(o.limit ?? 12) as Array<{
       id: string;
       name?: string | null;
+      transcript?: string | null;
       ended: string | null;
       final_outcome: string | null;
       started: string | null;
@@ -185,7 +226,7 @@ function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): 
       const last = r.last_ts || r.started;
       out.push({
         id: r.id,
-        name: displayName(r.id, r.name),
+        ...face(r.id, r.name, r.transcript),
         ended: !!r.ended,
         outcome: r.final_outcome,
         calls: r.calls,

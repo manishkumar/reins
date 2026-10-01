@@ -29,7 +29,7 @@ export async function runPostTool(): Promise<void> {
     } = require("../db") as typeof import("../db");
     const db = sessionId ? openDb(cwd) : null; // no real session => don't record
     if (db) {
-    upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
+    upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso(), (payload.transcript_path as string) || undefined);
     insertToolCall(db, {
       session_id: sessionId,
       tool: toolName,

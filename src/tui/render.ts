@@ -260,7 +260,7 @@ function holdItem(h: HoldView, m: WatchModel, st: Style, iw: number, on: boolean
   const age = ago(m.nowMs - Date.parse(p.ts));
   const l1 = lr(
     st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold(clean(p.tool))) + "  " + st.dim(clean(p.rule_id)),
-    st.dim(`${clean(h.sessionName)} · `) + st.fg("warn", age),
+    st.dim(`${clip(clean(h.sessionLabel ?? h.sessionName), Math.floor(iw / 2) - 6)} · `) + st.fg("warn", age),
     iw - 1,
   );
   const first = clean(h.input).replace(/\s+/g, " ").trim();
@@ -296,22 +296,39 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
   const l1 = lr(
     st.fg(L.tone, L.glyph) +
       " " +
-      st.fg("text", st.bold(clean(a.name))) +
-      " " +
-      st.dim(a.id.slice(0, 8)) +
+      st.fg("text", st.bold(clean(a.label ?? a.name))) +
       "  " +
       st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label),
     spark + " " + st.dim(`${a.calls}`.padStart(4)),
     iw - 1,
   );
-  let l2: string;
-  if (a.holds) l2 = "  " + st.fg("warn", `◆ ${a.holds} held, waiting on you`);
-  else if (a.steerQueued) l2 = "  " + st.fg("violet", "✎ steer queued: ") + st.dim(clean(a.steerQueued).replace(/\s+/g, " "));
+  // Who it is and what it was asked: the mnemonic and short id are how you
+  // address it, the branch and prompt are how you recognise it.
+  const l2 =
+    "  " +
+    st.dim((a.label ?? a.name) === a.name ? a.id.slice(0, 8) : `${clean(a.name)} ${a.id.slice(0, 8)}`) +
+    (a.branch ? st.fg("faint", " · ") + st.fg("accent", "⎇ " + clean(a.branch)) : "") +
+    (a.asked ? st.fg("faint", " · ") + st.dim("❯ " + clean(a.asked)) : "");
+  let l3: string;
+  if (a.holds) l3 = "  " + st.fg("warn", `◆ ${a.holds} held, waiting on you`);
+  else if (a.steerQueued) l3 = "  " + st.fg("violet", "✎ steer queued: ") + st.dim(clean(a.steerQueued).replace(/\s+/g, " "));
   else {
     const last = a.trajectory[a.trajectory.length - 1];
-    l2 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
+    l3 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
   }
-  return selected(st, [l1, l2], on, iw);
+  return selected(st, [l1, l2, l3], on, iw);
+}
+
+/** How a session is named in a detail line: its label, then the name and id that address it. */
+function sessionLine(label: string | undefined, name: string, id: string): string {
+  const l = clean(label ?? name);
+  const n = clean(name);
+  return l === n ? `${n} (${id.slice(0, 8)})` : `${l} · ${n} (${id.slice(0, 8)})`;
+}
+
+function clip(s: string, cols: number): string {
+  const max = Math.max(8, cols);
+  return width(s) <= max ? s : fit(s, max - 1).trimEnd() + "…";
 }
 
 const KIND: Record<CallKind, { glyph: string; tone: Tone }> = {
@@ -392,7 +409,7 @@ export function detailContent(
   }
   if (row.kind === "agent") {
     const a = m.agents.find((x) => x.id === row.id);
-    if (a) return { title: `AGENT · ${clean(a.name)}`, tone: "accent", lines: agentDetail(a, m, st, iw) };
+    if (a) return { title: `AGENT · ${clip(clean(a.label ?? a.name), iw - 12)}`, tone: "accent", lines: agentDetail(a, m, st, iw) };
   }
   return { title: "DETAIL", tone: "accent", lines: [st.dim("(gone)")] };
 }
@@ -420,7 +437,8 @@ export function holdDetail(h: HoldView, m: WatchModel, st: Style, iw: number): s
   const out: string[] = [
     ...kv(st, "rule", clean(p.rule_id), iw, "warn"),
     ...kv(st, "reason", clean(p.reason), iw),
-    ...kv(st, "session", `${clean(h.sessionName)} (${p.session_id.slice(0, 8)})`, iw),
+    ...kv(st, "session", sessionLine(h.sessionLabel, h.sessionName, p.session_id), iw),
+    ...(h.asked ? kv(st, "asked", clean(h.asked), iw, "muted") : []),
     ...kv(st, "directory", h.where ? clean(h.where) : "project root", iw),
     ...kv(st, "waiting", `${waited} (since ${new Date(p.ts).toLocaleString()})`, iw),
     ...kv(
@@ -467,7 +485,9 @@ function agentDetail(a: AgentView, m: WatchModel, st: Style, iw: number): string
   const L = LIVE[lv];
   const out: string[] = [
     ...kv(st, "status", `${L.glyph} ${L.label}${lv !== "active" && a.lastTsMs != null ? `, last call ${ago(m.nowMs - a.lastTsMs)} ago` : ""}`, iw, L.tone),
-    ...kv(st, "session", a.id, iw, "muted"),
+    ...kv(st, "session", `${clean(a.name)} · ${a.id}`, iw, "muted"),
+    ...(a.branch ? kv(st, "branch", clean(a.branch), iw, "accent") : []),
+    ...(a.asked ? kv(st, "asked", clean(a.asked), iw) : []),
     ...kv(st, "calls", String(a.calls) + (a.startedMs != null ? ` since ${new Date(a.startedMs).toLocaleString()}` : ""), iw),
   ];
   if (a.streak > 1) {
@@ -521,7 +541,7 @@ export function approveBody(m: WatchModel, ui: UiState, st: Style, holdId: strin
   const lines = [
     ...kv(st, "rule", clean(p.rule_id), iw, "warn"),
     ...kv(st, "reason", clean(p.reason), iw),
-    ...kv(st, "session", `${clean(hv.sessionName)} (${p.session_id.slice(0, 8)})`, iw),
+    ...kv(st, "session", sessionLine(hv.sessionLabel, hv.sessionName, p.session_id), iw),
     ...kv(st, "directory", hv.where ? clean(hv.where) : "project root", iw),
     "",
     rule(st, `${clean(p.tool)} · the exact input you are approving`, iw),
@@ -578,7 +598,7 @@ function modalBox(m: WatchModel, ui: UiState, st: Style): string[] {
 
   if (md.kind === "steer") {
     const a = md.target ? m.agents.find((x) => x.id === md.target) : null;
-    const who = md.target ? `${clean(a?.name ?? md.target.slice(0, 8))} (${md.target.slice(0, 8)})` : "every agent (broadcast)";
+    const who = md.target ? (a ? sessionLine(a.label, a.name, a.id) : md.target.slice(0, 8)) : "every agent (broadcast)";
     const queued = md.target ? a?.steerQueued : m.broadcast;
     const body = [
       st.fg("violet", st.bold("Steer ")) + st.fg("text", st.bold(who)),
@@ -638,7 +658,7 @@ export function renderSnapshot(m: WatchModel, st: Style, W: number): string {
   for (const h of m.holds) {
     const p = h.action;
     out.push(
-      `  ◆ ${p.id}  ${clean(p.tool)}  [${clean(p.rule_id)}]  ${clean(h.sessionName)}  waiting ${ago(m.nowMs - Date.parse(p.ts))}`,
+      `  ◆ ${p.id}  ${clean(p.tool)}  [${clean(p.rule_id)}]  ${clean(h.sessionLabel ?? h.sessionName)}  waiting ${ago(m.nowMs - Date.parse(p.ts))}`,
     );
     out.push("    " + fit(clean(h.input).replace(/\s+/g, " "), Math.max(20, W - 6)).trimEnd());
     out.push(st.dim(`    reins approve ${p.id}   reins deny ${p.id}`));
@@ -658,6 +678,8 @@ export function renderSnapshot(m: WatchModel, st: Style, W: number): string {
       const last = a.trajectory[a.trajectory.length - 1];
       const since = a.lastTsMs != null ? ` ${ago(m.nowMs - a.lastTsMs)}` : "";
       out.push(`  ${LIVE[lv].glyph} ${clean(a.name).padEnd(16)} ${a.id.slice(0, 8)}  ${(lv + since).padEnd(12)} ${String(a.calls).padStart(4)} calls`);
+      const about = [a.label && a.label !== a.name ? clean(a.label) : "", a.branch ? "⎇ " + clean(a.branch) : "", a.asked ? "❯ " + clean(a.asked) : ""].filter(Boolean);
+      if (about.length) out.push("      " + fit(about.join(" · "), Math.max(20, W - 8)).trimEnd());
       if (a.steerQueued) out.push(`      ✎ steer queued: ${fit(clean(a.steerQueued), Math.max(20, W - 24)).trimEnd()}`);
       if (last) out.push("      " + fit(`${last.tool}  ${clean(last.summary).replace(/\s+/g, " ")}`, Math.max(20, W - 8)).trimEnd());
     }

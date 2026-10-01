@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.openDb = openDb;
 exports.hasSessionNameColumn = hasSessionNameColumn;
 exports.ensureSessionNameColumn = ensureSessionNameColumn;
+exports.hasSessionTranscriptColumn = hasSessionTranscriptColumn;
+exports.ensureSessionTranscriptColumn = ensureSessionTranscriptColumn;
 exports.setSessionName = setSessionName;
 exports.listSessionIds = listSessionIds;
 exports.matchSessions = matchSessions;
@@ -29,7 +31,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   total_tokens INTEGER,
   total_cost REAL,
   final_outcome TEXT,
-  name TEXT
+  name TEXT,
+  transcript TEXT
 );
 CREATE TABLE IF NOT EXISTS tool_calls (
   session_id TEXT,
@@ -109,6 +112,12 @@ function openDb(payloadCwd) {
     catch {
         /* naming unavailable on this db — display falls back to mnemonics */
     }
+    try {
+        ensureSessionTranscriptColumn(db);
+    }
+    catch {
+        /* no transcript path on this db — the cockpit shows names without titles */
+    }
     _db = db;
     return db;
 }
@@ -129,6 +138,24 @@ function ensureSessionNameColumn(db) {
     if (hasSessionNameColumn(db))
         return;
     withRetry(() => db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT`));
+}
+/** True if this runs.db has the sessions.transcript column (added in 0.5.x). */
+function hasSessionTranscriptColumn(db) {
+    try {
+        const row = db
+            .prepare(`SELECT COUNT(*) AS c FROM pragma_table_info('sessions') WHERE name = 'transcript'`)
+            .get();
+        return (row?.c ?? 0) > 0;
+    }
+    catch {
+        return false;
+    }
+}
+/** Add sessions.transcript to an older runs.db. Idempotent. */
+function ensureSessionTranscriptColumn(db) {
+    if (hasSessionTranscriptColumn(db))
+        return;
+    withRetry(() => db.exec(`ALTER TABLE sessions ADD COLUMN transcript TEXT`));
 }
 /** Set (or with null, clear) a session's custom display name. */
 function setSessionName(db, sessionId, name) {
@@ -248,11 +275,24 @@ function syncSleep(ms) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 /** Insert the session row if it does not exist yet (first tool call / stop). */
-function upsertSessionStart(db, sessionId, repo, startedIso) {
+function upsertSessionStart(db, sessionId, repo, startedIso, transcriptPath) {
     withRetry(() => db
         .prepare(`INSERT INTO sessions (id, repo, started) VALUES (?, ?, ?)
          ON CONFLICT(id) DO NOTHING`)
         .run(sessionId, repo, startedIso));
+    if (!transcriptPath)
+        return;
+    // Display context only (the cockpit reads the session's title from it). Its
+    // own statement and its own try: a db without the column still records the
+    // session.
+    try {
+        withRetry(() => db
+            .prepare(`UPDATE sessions SET transcript = ? WHERE id = ? AND transcript IS NOT ?`)
+            .run(transcriptPath, sessionId, transcriptPath));
+    }
+    catch {
+        /* older runs.db without the column */
+    }
 }
 /**
  * Insert a tool-call row, computing seq atomically inside the statement. Doing
