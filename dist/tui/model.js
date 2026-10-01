@@ -39,6 +39,7 @@ exports.liveness = liveness;
 const path = __importStar(require("node:path"));
 const db_1 = require("../db");
 const claim_1 = require("../claim");
+const footprint_1 = require("../footprint");
 const sessionFace_1 = require("../sessionFace");
 const holds_1 = require("../holds");
 const holdActions_1 = require("../holdActions");
@@ -60,7 +61,7 @@ exports.SPARK_BUCKET_MS = 30_000;
 const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)\])?(?: \[hold:[^\]]+\])?$/;
 function buildWatchModel(db, repo, threshold, o = {}) {
     const nowMs = o.nowMs ?? Date.now();
-    const agents = db ? readAgents(db, threshold, nowMs, o) : [];
+    const agents = db ? readAgents(db, (0, holds_1.proposalWorkdir)(repo), threshold, nowMs, o) : [];
     const known = new Map(agents.map((a) => [a.id, a]));
     const lookup = (0, sessionFace_1.faceReader)(db);
     const faceOf = (id) => known.get(id) ?? lookup(id);
@@ -98,7 +99,7 @@ function buildWatchModel(db, repo, threshold, o = {}) {
         broadcast,
     };
 }
-function readAgents(db, threshold, nowMs, o) {
+function readAgents(db, root, threshold, nowMs, o) {
     const out = [];
     try {
         const hasName = (0, db_1.hasSessionNameColumn)(db);
@@ -153,7 +154,7 @@ function readAgents(db, threshold, nowMs, o) {
                 spark,
                 trajectory,
                 holds: 0,
-                claim: claimOf(db, r.id, r.calls),
+                ...factsOf(db, r.id, r.calls, root),
             });
         }
     }
@@ -162,15 +163,16 @@ function readAgents(db, threshold, nowMs, o) {
     }
     return out;
 }
-/** A session's verdict changes only when it makes a call, so it is computed once per call count. */
-const claims = new Map();
-function claimOf(db, id, calls) {
-    const hit = claims.get(id);
+/** A session's verdict and footprint change only when it makes a call, so they are computed once per call count. */
+const facts = new Map();
+function factsOf(db, id, calls, root) {
+    const hit = facts.get(id);
     if (hit && hit.calls === calls)
-        return hit.claim;
-    const claim = (0, claim_1.checkClaim)((0, db_1.listSessionCalls)(db, id));
-    claims.set(id, { calls, claim });
-    return claim;
+        return hit;
+    const rows = (0, db_1.listSessionCalls)(db, id);
+    const next = { calls, claim: (0, claim_1.checkClaim)(rows), footprint: (0, footprint_1.footprint)(rows, root) };
+    facts.set(id, next);
+    return next;
 }
 function toCall(cr, streak) {
     const m = cr.input_summary.match(TAGGED);

@@ -44,6 +44,8 @@ const config_1 = require("../config");
 const paths_1 = require("../paths");
 const sessionFace_1 = require("../sessionFace");
 const claim_1 = require("../claim");
+const footprint_1 = require("../footprint");
+const holds_1 = require("../holds");
 const format_1 = require("./format");
 /** DENIED/ASKED rows carry the rule that stopped them: "… [guard:<id>]". */
 const GUARD_TAG = /\s\[guard:([^\]]+)\]$/;
@@ -109,6 +111,7 @@ function collect(db, repo, threshold) {
         ORDER BY COALESCE(MAX(t.ts), s.started) DESC`)
         .all();
     const faceOf = (0, sessionFace_1.faceReader)(db);
+    const root = (0, holds_1.proposalWorkdir)(repo);
     const sessions = [];
     const totals = {
         sessions: 0,
@@ -178,6 +181,7 @@ function collect(db, repo, threshold) {
             id: s.id,
             face: faceOf(s.id),
             claim: (0, claim_1.checkClaim)(callRows.map((cr) => ({ tool: cr.tool, summary: cr.input_summary, ok: cr.ok }))),
+            footprint: (0, footprint_1.footprint)(callRows.map((cr) => ({ tool: cr.tool, summary: cr.input_summary, ok: cr.ok })), root),
             started: s.started,
             ended: s.ended,
             outcome: s.final_outcome,
@@ -270,6 +274,7 @@ details.session > summary::-webkit-details-marker { display: none; }
 .claim.stale, .claim.unverified { color: #d29922; }
 .claim.verified { color: #3fb950; }
 .claim code { color: #7d8590; }
+.footprint { color: #7d8590; font-size: 12px; margin: 0 14px 10px; white-space: pre-wrap; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid #232b35; color: #7d8590; }
 .badge.completed { color: #3fb950; border-color: #1f3d28; }
 .badge.running { color: #e3b341; border-color: #3d3417; }
@@ -432,9 +437,15 @@ function sessionSection(s, flagged = true) {
   <span class="badge ${badgeClass}">${esc(status)}</span>
   <span class="meta">${esc(when)} · ${bits.map(esc).join(" · ")}</span>
 </summary>
-${about ? `<div class="about">${esc(about)}</div>` : ""}${claimLine(s.claim)}
+${about ? `<div class="about">${esc(about)}</div>` : ""}${claimLine(s.claim)}${footprintBlock(s.footprint)}
 <div class="traj">${rows}</div>
 </details>`;
+}
+function footprintBlock(fp) {
+    const lines = fp ? (0, footprint_1.footprintLines)(fp) : [];
+    if (!lines.length)
+        return "";
+    return `\n<pre class="footprint">${lines.map(esc).join("\n")}</pre>`;
 }
 function claimLine(claim) {
     if (!claim || claim.verdict === "none")

@@ -7,6 +7,8 @@ import { loadConfig } from "../config";
 import { resolveProjectDir, reinsDir } from "../paths";
 import { aboutOf, faceReader, headOf, shortId, type SessionFace } from "../sessionFace";
 import { checkClaim, type Claim } from "../claim";
+import { footprint, footprintLines, type Footprint } from "../footprint";
+import { proposalWorkdir } from "../holds";
 import { c } from "./format";
 
 /**
@@ -36,6 +38,8 @@ export interface ReportSession {
   face?: SessionFace;
   /** What the session's own calls say about its work being done. */
   claim?: Claim;
+  /** What it edited and ran. */
+  footprint?: Footprint;
   started: string | null;
   ended: string | null;
   outcome: string | null;
@@ -169,6 +173,7 @@ function collect(
   }>;
 
   const faceOf = faceReader(db);
+  const root = proposalWorkdir(repo);
   const sessions: ReportSession[] = [];
   const totals = {
     sessions: 0,
@@ -239,6 +244,7 @@ function collect(
       id: s.id,
       face: faceOf(s.id),
       claim: checkClaim(callRows.map((cr) => ({ tool: cr.tool, summary: cr.input_summary, ok: cr.ok }))),
+      footprint: footprint(callRows.map((cr) => ({ tool: cr.tool, summary: cr.input_summary, ok: cr.ok })), root),
       started: s.started,
       ended: s.ended,
       outcome: s.final_outcome,
@@ -337,6 +343,7 @@ details.session > summary::-webkit-details-marker { display: none; }
 .claim.stale, .claim.unverified { color: #d29922; }
 .claim.verified { color: #3fb950; }
 .claim code { color: #7d8590; }
+.footprint { color: #7d8590; font-size: 12px; margin: 0 14px 10px; white-space: pre-wrap; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid #232b35; color: #7d8590; }
 .badge.completed { color: #3fb950; border-color: #1f3d28; }
 .badge.running { color: #e3b341; border-color: #3d3417; }
@@ -493,9 +500,15 @@ function sessionSection(s: ReportSession, flagged = true): string {
   <span class="badge ${badgeClass}">${esc(status)}</span>
   <span class="meta">${esc(when)} · ${bits.map(esc).join(" · ")}</span>
 </summary>
-${about ? `<div class="about">${esc(about)}</div>` : ""}${claimLine(s.claim)}
+${about ? `<div class="about">${esc(about)}</div>` : ""}${claimLine(s.claim)}${footprintBlock(s.footprint)}
 <div class="traj">${rows}</div>
 </details>`;
+}
+
+function footprintBlock(fp: Footprint | undefined): string {
+  const lines = fp ? footprintLines(fp) : [];
+  if (!lines.length) return "";
+  return `\n<pre class="footprint">${lines.map(esc).join("\n")}</pre>`;
 }
 
 function claimLine(claim: Claim | undefined): string {

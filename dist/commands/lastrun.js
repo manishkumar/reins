@@ -9,6 +9,9 @@ const config_1 = require("../config");
 const holds_1 = require("../holds");
 const sessionFace_1 = require("../sessionFace");
 const claim_1 = require("../claim");
+const footprint_1 = require("../footprint");
+const paths_1 = require("../paths");
+const holds_2 = require("../holds");
 function cmdLastrun(args) {
     const db = (0, db_1.openDbReadOnly)();
     if (!db) {
@@ -45,6 +48,7 @@ function cmdLastrun(args) {
     console.log("");
     printSummary(calls, threshold);
     printClaim(calls);
+    printFootprint(calls);
     printDecisions(db, session.id);
     printAwaiting(session.id);
     return 0;
@@ -113,6 +117,16 @@ function printClaim(calls) {
     console.log(`  ${tone(claim.text)}`);
     if (claim.command)
         console.log(`  ${format_1.c.dim((0, util_1.truncate)(claim.command, 110))}`);
+}
+/** What the session edited and ran, to read beside what it was asked (src/footprint.ts). */
+function printFootprint(calls) {
+    const lines = (0, footprint_1.footprintLines)((0, footprint_1.footprint)(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })), (0, holds_2.proposalWorkdir)((0, paths_1.resolveProjectDir)())));
+    if (!lines.length)
+        return;
+    console.log("");
+    console.log(format_1.c.bold("Footprint") + format_1.c.dim("  (facts from the captured calls; whether it matches the ask is yours to judge)"));
+    for (const l of lines)
+        console.log(l.startsWith("  ") ? format_1.c.dim("  " + l) : "  " + l);
 }
 function printHeader(s, callCount, face) {
     const dur = duration(s.started, s.ended);

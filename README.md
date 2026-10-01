@@ -355,6 +355,30 @@ What it can and cannot see:
 - **Edits made through the shell are invisible.** It counts `Edit`, `Write`, `MultiEdit` and `NotebookEdit` calls. A `sed -i` or a script that rewrites files is not counted as an edit. Markdown and text files are not counted either, since a test run does not verify prose.
 - **A passing run is the agent's own run.** "verified" means the last test command the agent chose to run exited zero. It does not mean the tests cover the change.
 - **It needs capture** (SQLite, Node ≥ 22.5) and the `PostToolUseFailure` hook above. Without that hook no failed run is ever recorded, and a failing session reads as verified or stale.
+- **A pass counts the shell writes it could not see.** When shell commands that can change files ran after the last passing run, the verdict says how many: `tests passed after the last edit; 2 shell commands after it may have changed files`.
+
+---
+
+## Footprint
+
+Next to the prompt a session was given, reins shows what the session edited and ran, so you can compare the two yourself:
+
+```
+asked      the redirect loops on logout
+edited 7 files in 3 directories, 31 edits (1 outside the project)
+  src/auth/  4 files · 22 edits
+  src/billing/  2 files · 8 edits
+  ./  1 file · 1 edit
+most edited: src/auth/session.ts ×14, src/auth/login.ts ×5, src/billing/invoice.ts ×6
+3 shell commands may have changed files too (redirects, sed -i, inline scripts); those files are not listed
+ran: npm test ×9 · git status ×4 · grep ×12
+```
+
+It is in `reins lastrun`, the agent detail pane of `reins watch`, and each session in `reins report`.
+
+**Facts only.** reins does not say whether the footprint matches the prompt. A session asked about a logout redirect that made 8 edits under `src/billing/` may be drifting or may have found the cause there. Deciding that would take a model, and reins makes no model or network calls.
+
+What it cannot see: a file changed by a shell command is not in the list. It counts the shell commands that could have changed files so the gap is visible, and for an agent that edits through scripts that count can be most of the work. Commands are read from the first 160 characters of each call, and files outside the project are shown by absolute path.
 
 ---
 
@@ -400,8 +424,8 @@ Summary
 </p>
 
 - **NEEDS YOU**, top left: every held action, plus hold breaches and worked-around guards from the last 7 days. It reads from `.reins/pending/` and the bypass ledger, so it works without SQLite.
-- **AGENTS**, below: each session leads with what it is about, then its live status (`active` / `looping` / `idle` / `done`) and a sparkline of its calls over the last 12 minutes. The second line has the name and short id you address it by, its git branch, and the last prompt you sent it. The third has its last call, queued steer, or held action. Status comes from recent tool activity, not the per-turn Stop hook, so an agent mid-conversation reads `active`. `looping` means the same call several times in a row, as the loop alarm counts it.
-- **Detail**, right: for a hold, the rule, reason, session, the prompt that session was last given, directory, transport, and the **full proposed input**. For an agent, its branch, last prompt, activity and trajectory, newest first. `⏎` zooms it to full screen.
+- **AGENTS**, below: each session leads with what it is about, then its live status (`active` / `looping` / `idle` / `done`) and a sparkline of its calls over the last 12 minutes. The second line has the name and short id you address it by, its git branch, and the last prompt you sent it. The third has its last call, queued steer, or held action. An agent that is not working also carries its [claim check](#claim-check) verdict beside the status. Status comes from recent tool activity, not the per-turn Stop hook, so an agent mid-conversation reads `active`. `looping` means the same call several times in a row, as the loop alarm counts it.
+- **Detail**, right: for a hold, the rule, reason, session, the prompt that session was last given, directory, transport, and the **full proposed input**. For an agent, its branch, last prompt, claim check verdict, footprint, activity and trajectory, newest first. `⏎` zooms it to full screen.
 
 **Where a session's title comes from.** The cockpit, `reins sessions`, `reins pending`, `reins lastrun`, the steer picker and the report all name a session the same way. A name set with `reins name` leads. Otherwise they show the title Claude Code gave the session (the one in its own session list, or the one you set with `/rename`), read from the tail of the session transcript along with the branch and last prompt. Without a transcript the `brave-otter` mnemonic leads, as before. The caveats: the transcript format is not a documented interface, so a Claude Code update can turn titles back into mnemonics until reins catches up. The path is recorded by capture, so titles need SQLite (Node ≥ 22.5), and a session shows its title after its first completed tool call under this version. Claude Code titles a session early, so a long session's title can describe where it started. The last prompt is the current one. The title, branch and prompt are display only. `reins steer` still takes the id, the mnemonic or your custom name, and no guard or hold reads them.
 

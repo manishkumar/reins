@@ -2,6 +2,7 @@ import * as path from "node:path";
 import type { SqlDb } from "../store";
 import { hasSessionNameColumn, hasSessionTranscriptColumn, listSessionCalls } from "../db";
 import { checkClaim, type Claim } from "../claim";
+import { footprint, type Footprint } from "../footprint";
 import { faceReader, sessionFace, type SessionFace } from "../sessionFace";
 import { listPending, proposalWorkdir, type PendingAction } from "../holds";
 import { supersededDeferIds } from "../holdActions";
@@ -54,6 +55,8 @@ export interface AgentView extends SessionFace {
   holds: number;
   /** What the session's own calls say about its work being done (src/claim.ts). */
   claim: Claim;
+  /** What it edited and ran, to read beside what it was asked (src/footprint.ts). */
+  footprint: Footprint;
 }
 
 export interface HoldView {
@@ -94,7 +97,7 @@ const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)
 
 export function buildWatchModel(db: SqlDb | null, repo: string, threshold: number, o: BuildOpts = {}): WatchModel {
   const nowMs = o.nowMs ?? Date.now();
-  const agents = db ? readAgents(db, threshold, nowMs, o) : [];
+  const agents = db ? readAgents(db, proposalWorkdir(repo), threshold, nowMs, o) : [];
   const known = new Map<string, SessionFace>(agents.map((a) => [a.id, a]));
   const lookup = faceReader(db);
   const faceOf = (id: string): SessionFace => known.get(id) ?? lookup(id);
@@ -135,7 +138,7 @@ export function buildWatchModel(db: SqlDb | null, repo: string, threshold: numbe
   };
 }
 
-function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): AgentView[] {
+function readAgents(db: SqlDb, root: string, threshold: number, nowMs: number, o: BuildOpts): AgentView[] {
   const out: AgentView[] = [];
   try {
     const hasName = hasSessionNameColumn(db);
@@ -207,7 +210,7 @@ function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): 
         spark,
         trajectory,
         holds: 0,
-        claim: claimOf(db, r.id, r.calls),
+        ...factsOf(db, r.id, r.calls, root),
       });
     }
   } catch {
@@ -216,15 +219,16 @@ function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): 
   return out;
 }
 
-/** A session's verdict changes only when it makes a call, so it is computed once per call count. */
-const claims = new Map<string, { calls: number; claim: Claim }>();
+/** A session's verdict and footprint change only when it makes a call, so they are computed once per call count. */
+const facts = new Map<string, { calls: number; claim: Claim; footprint: Footprint }>();
 
-function claimOf(db: SqlDb, id: string, calls: number): Claim {
-  const hit = claims.get(id);
-  if (hit && hit.calls === calls) return hit.claim;
-  const claim = checkClaim(listSessionCalls(db, id));
-  claims.set(id, { calls, claim });
-  return claim;
+function factsOf(db: SqlDb, id: string, calls: number, root: string): { claim: Claim; footprint: Footprint } {
+  const hit = facts.get(id);
+  if (hit && hit.calls === calls) return hit;
+  const rows = listSessionCalls(db, id);
+  const next = { calls, claim: checkClaim(rows), footprint: footprint(rows, root) };
+  facts.set(id, next);
+  return next;
 }
 
 function toCall(

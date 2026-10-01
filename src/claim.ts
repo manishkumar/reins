@@ -22,6 +22,8 @@
  * and checks run outside the session.
  */
 
+import { mayWriteFiles, shellCommands } from "./shell";
+
 export type ClaimVerdict = "failed" | "stale" | "unverified" | "unknown" | "verified" | "none";
 
 export interface Claim {
@@ -34,6 +36,8 @@ export interface Claim {
   edited: number;
   /** Of those, how many were edited after the last test or build run. */
   editedSince: number;
+  /** Shell commands after that run that can change files without an edit tool. */
+  shellWritesSince: number;
 }
 
 export interface ClaimCall {
@@ -56,9 +60,6 @@ const GATE_ROW = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): /;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 /** Prose is not what a test run verifies; editing it alone is not an unverified change. */
 const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
-
-/** Words allowed in front of the command itself. */
-const PREFIX = /^(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S*|time|command|exec|sudo|npx|bunx|pnpx|pnpm\s+exec|pnpm\s+dlx|yarn\s+dlx|bundle\s+exec|poetry\s+run|uv\s+run|pipenv\s+run)\s+)*/;
 
 const TEST_CMDS: RegExp[] = [
   /^(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t)(:[\w:.-]+)?(\s|$)/,
@@ -92,20 +93,17 @@ const BUILD_CMDS: RegExp[] = [
  * be trusted to be theirs. Null when it runs none.
  */
 export function verificationIn(command: string): { kinds: Kind[]; visible: boolean } | null {
-  // A heredoc body is data, not commands.
-  const cut = command.indexOf("<<");
-  const head = cut >= 0 ? command.slice(0, cut) : command;
   const kinds = new Set<Kind>();
+  // A summary cut short may hide a pipe.
   let visible = !command.endsWith("…");
-  const pipefail = /\bpipefail\b/.test(head);
+  const pipefail = /\bpipefail\b/.test(command);
 
-  for (const pipeline of head.split(/&&|\|\||;/)) {
-    const stages = pipeline.split("|");
-    const first = stages[0].trim().replace(PREFIX, "");
-    const kind: Kind | null = TEST_CMDS.some((re) => re.test(first)) ? "test" : BUILD_CMDS.some((re) => re.test(first)) ? "build" : null;
+  for (const cmd of shellCommands(command)) {
+    const text = cmd.words.join(" ");
+    const kind: Kind | null = TEST_CMDS.some((re) => re.test(text)) ? "test" : BUILD_CMDS.some((re) => re.test(text)) ? "build" : null;
     if (!kind) continue;
     kinds.add(kind);
-    if (stages.length > 1 && !pipefail) visible = false;
+    if (cmd.piped && !pipefail) visible = false;
   }
   return kinds.size ? { kinds: [...kinds], visible } : null;
 }
@@ -113,6 +111,7 @@ export function verificationIn(command: string): { kinds: Kind[]; visible: boole
 export function checkClaim(calls: ClaimCall[]): Claim {
   const last: Partial<Record<Kind, Run>> = {};
   const edits: Array<{ file: string; at: number }> = [];
+  const shellWrites: number[] = [];
 
   calls.forEach((c, at) => {
     if (GATE_ROW.test(c.summary)) return; // a gate row is a decision, not an execution
@@ -122,7 +121,10 @@ export function checkClaim(calls: ClaimCall[]): Claim {
     }
     if (c.tool !== "Bash") return;
     const v = verificationIn(c.summary);
-    if (!v) return;
+    if (!v) {
+      if (c.ok !== 0 && mayWriteFiles(c.summary)) shellWrites.push(at);
+      return;
+    }
     const outcome: Outcome = c.ok === null || !v.visible ? "unknown" : c.ok === 0 ? "fail" : "pass";
     for (const kind of v.kinds) last[kind] = { kind, outcome, command: c.summary, at };
   });
@@ -131,13 +133,19 @@ export function checkClaim(calls: ClaimCall[]): Claim {
   const runs = [last.test, last.build].filter((r): r is Run => !!r);
   if (!runs.length) {
     return edited
-      ? { verdict: "unverified", text: `${files(edited)} edited, no test or build run`, command: null, edited, editedSince: edited }
-      : { verdict: "none", text: "", command: null, edited, editedSince: 0 };
+      ? { verdict: "unverified", text: `${files(edited)} edited, no test or build run`, command: null, edited, editedSince: edited, shellWritesSince: 0 }
+      : { verdict: "none", text: "", command: null, edited, editedSince: 0, shellWritesSince: 0 };
   }
 
   const latest = runs.reduce((a, b) => (b.at > a.at ? b : a));
   const editedSince = new Set(edits.filter((e) => e.at > latest.at).map((e) => e.file)).size;
-  const base = { edited, editedSince };
+  const shellWritesSince = shellWrites.filter((at) => at > latest.at).length;
+  const base = { edited, editedSince, shellWritesSince };
+  // Files can change without an edit tool (a redirect, sed -i, a script). The
+  // check cannot see those changes, so a pass says how many it did not see.
+  const unseen = shellWritesSince
+    ? `; ${shellWritesSince} shell command${shellWritesSince === 1 ? "" : "s"} after it may have changed files`
+    : "";
 
   // The latest run of each kind is what stands. A failed test run is not
   // repaired by a later build that passed.
@@ -158,7 +166,7 @@ export function checkClaim(calls: ClaimCall[]): Claim {
   return {
     ...base,
     verdict: "verified",
-    text: tests ? `tests passed${after}` : `the build passed${after}; no test run${after}`,
+    text: (tests ? `tests passed${after}` : `the build passed${after}; no test run${after}`) + unseen,
     command: latest.command,
   };
 }

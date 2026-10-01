@@ -6,6 +6,9 @@ import { loadConfig } from "../config";
 import { pendingForSession } from "../holds";
 import { faceReader, type SessionFace } from "../sessionFace";
 import { checkClaim } from "../claim";
+import { footprint, footprintLines } from "../footprint";
+import { resolveProjectDir } from "../paths";
+import { proposalWorkdir } from "../holds";
 
 interface SessionRow {
   id: string;
@@ -64,6 +67,7 @@ export function cmdLastrun(args: string[]): number {
   console.log("");
   printSummary(calls, threshold);
   printClaim(calls);
+  printFootprint(calls);
   printDecisions(db, session.id);
   printAwaiting(session.id);
   return 0;
@@ -129,6 +133,17 @@ function printClaim(calls: CallRow[]): void {
   console.log(c.bold("Claim check") + c.dim("  (from this session's own calls; reports, never blocks)"));
   console.log(`  ${tone(claim.text)}`);
   if (claim.command) console.log(`  ${c.dim(truncate(claim.command, 110))}`);
+}
+
+/** What the session edited and ran, to read beside what it was asked (src/footprint.ts). */
+function printFootprint(calls: CallRow[]): void {
+  const lines = footprintLines(
+    footprint(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })), proposalWorkdir(resolveProjectDir())),
+  );
+  if (!lines.length) return;
+  console.log("");
+  console.log(c.bold("Footprint") + c.dim("  (facts from the captured calls; whether it matches the ask is yours to judge)"));
+  for (const l of lines) console.log(l.startsWith("  ") ? c.dim("  " + l) : "  " + l);
 }
 
 function printHeader(s: SessionRow, callCount: number, face: SessionFace): void {

@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { AttentionEvent } from "../attention";
+import { footprintLines } from "../footprint";
 import { box, clean, fit, hjoin, overlay, sparkline, Style, width, wrap, type Tone } from "./term";
 import {
   liveness,
@@ -522,6 +523,12 @@ function agentDetail(a: AgentView, m: WatchModel, st: Style, iw: number): string
   }
   if (a.steerQueued) out.push(...kv(st, "steer", clean(a.steerQueued), iw, "violet"));
   if (a.holds) out.push(...kv(st, "held", `${a.holds} action${a.holds === 1 ? "" : "s"} waiting on you`, iw, "warn"));
+
+  const fp = a.footprint ? footprintLines(a.footprint) : [];
+  if (fp.length) {
+    out.push("", rule(st, "footprint · what it edited and ran", iw));
+    for (const l of fp) out.push(...wrap(clean(l), iw).map((w, i) => (l.startsWith("  ") || i > 0 ? st.dim(w) : st.fg("text", w))));
+  }
 
   const mins = Math.round((SPARK_BUCKETS * SPARK_BUCKET_MS) / 60000);
   const bars = a.spark;

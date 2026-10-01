@@ -21,6 +21,11 @@ All notable changes to `reins` are documented here. Format loosely follows
   run passed. Failed, stale and unverified get a line at Stop; every verdict
   is in `reins lastrun`, the cockpit and the report. It reports and never
   blocks. `"claimCheck": false` silences the Stop line.
+- **Footprint.** `reins lastrun`, the cockpit's agent detail pane and the
+  report show which files and directories a session edited and which commands
+  it ran most, next to the prompt it was given. Facts only: reins does not
+  judge whether the two match. Shell commands that can change files are
+  counted, since their changes are not in the list.
 
 - **`reins watch` is now a cockpit you can act from.** Three panes: NEEDS YOU
   (held actions, hold breaches, worked-around guards), AGENTS (live status,

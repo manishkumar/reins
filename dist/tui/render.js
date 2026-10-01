@@ -49,6 +49,7 @@ exports.approveSeenAll = approveSeenAll;
 exports.renderSnapshot = renderSnapshot;
 exports.ago = ago;
 const path = __importStar(require("node:path"));
+const footprint_1 = require("../footprint");
 const term_1 = require("./term");
 const model_1 = require("./model");
 exports.MIN_W = 60;
@@ -463,6 +464,12 @@ function agentDetail(a, m, st, iw) {
         out.push(...kv(st, "steer", (0, term_1.clean)(a.steerQueued), iw, "violet"));
     if (a.holds)
         out.push(...kv(st, "held", `${a.holds} action${a.holds === 1 ? "" : "s"} waiting on you`, iw, "warn"));
+    const fp = a.footprint ? (0, footprint_1.footprintLines)(a.footprint) : [];
+    if (fp.length) {
+        out.push("", rule(st, "footprint · what it edited and ran", iw));
+        for (const l of fp)
+            out.push(...(0, term_1.wrap)((0, term_1.clean)(l), iw).map((w, i) => (l.startsWith("  ") || i > 0 ? st.dim(w) : st.fg("text", w))));
+    }
     const mins = Math.round((model_1.SPARK_BUCKETS * model_1.SPARK_BUCKET_MS) / 60000);
     const bars = a.spark;
     const peak = Math.max(0, ...bars);
