@@ -268,3 +268,46 @@ test("hold: an approval filed at the root is seen by a call proposed from a subd
   const retry = JSON.parse(runHookFromSubdir("pre-tool", event, dir, "packages/api"));
   assert.strictEqual(retry.hookSpecificOutput.permissionDecision, "allow");
 });
+
+// ---------- PostToolUseFailure: a failed call is still a call ----------
+
+test("post-tool-failure: a failed command is captured as failed; an interrupted one is unknown", { skip: !hasSqlite }, () => {
+  const dir = tmpProject();
+  const fail = (cmd, extra = {}) =>
+    runHook(
+      "post-tool-failure",
+      { cwd: dir, session_id: "f1", tool_name: "Bash", tool_input: { command: cmd }, error: "Exit code 1", ...extra },
+      dir,
+    );
+  fail("npm test");
+  fail("npm run build", { is_interrupt: true });
+  runHook("post-tool", { cwd: dir, session_id: "f1", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: {} }, dir);
+
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(path.join(dir, ".reins", "runs.db"), { readOnly: true });
+  const rows = db.prepare(`SELECT input_summary, ok FROM tool_calls WHERE session_id = 'f1' ORDER BY seq`).all();
+  db.close();
+  assert.deepStrictEqual(
+    rows.map((r) => [r.input_summary, r.ok]),
+    [
+      ["npm test", 0],
+      ["npm run build", null],
+      ["ls", 1],
+    ],
+  );
+});
+
+test("loop alarm: a command failing on repeat trips it, answered on the failure event", { skip: !hasSqlite }, () => {
+  const dir = tmpProject();
+  const fail = () =>
+    runHook(
+      "post-tool-failure",
+      { cwd: dir, session_id: "f2", tool_name: "Bash", tool_input: { command: "npm test" }, error: "Exit code 1" },
+      dir,
+    );
+  assert.strictEqual(fail(), "");
+  assert.strictEqual(fail(), "");
+  const out = JSON.parse(fail());
+  assert.strictEqual(out.hookSpecificOutput.hookEventName, "PostToolUseFailure");
+  assert.match(out.hookSpecificOutput.additionalContext, /loop alarm/);
+});

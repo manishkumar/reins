@@ -152,6 +152,11 @@ async function runHook(rest) {
                 await runPostTool();
                 return 0;
             }
+            case "post-tool-failure": {
+                const { runPostTool } = await Promise.resolve().then(() => __importStar(require("./hooks/postTool")));
+                await runPostTool(true);
+                return 0;
+            }
             case "stop": {
                 const { runStop } = await Promise.resolve().then(() => __importStar(require("./hooks/stop")));
                 await runStop();

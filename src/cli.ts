@@ -121,6 +121,11 @@ async function runHook(rest: string[]): Promise<number> {
         await runPostTool();
         return 0;
       }
+      case "post-tool-failure": {
+        const { runPostTool } = await import("./hooks/postTool");
+        await runPostTool(true);
+        return 0;
+      }
       case "stop": {
         const { runStop } = await import("./hooks/stop");
         await runStop();

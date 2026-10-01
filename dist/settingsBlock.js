@@ -19,6 +19,15 @@ exports.SETTINGS_BLOCK = {
                 hooks: [{ type: "command", command: "reins hook post-tool" }],
             },
         ],
+        // Claude Code sends a tool call that FAILED here and not to PostToolUse.
+        // Without this entry a failing command is never captured: no failed test
+        // run in the trajectory, and no loop alarm for a command failing on repeat.
+        PostToolUseFailure: [
+            {
+                matcher: "*",
+                hooks: [{ type: "command", command: "reins hook post-tool-failure" }],
+            },
+        ],
         Stop: [
             {
                 hooks: [{ type: "command", command: "reins hook stop" }],

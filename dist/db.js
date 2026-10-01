@@ -11,6 +11,7 @@ exports.matchSessions = matchSessions;
 exports.recentActiveSessions = recentActiveSessions;
 exports.openDbReadOnly = openDbReadOnly;
 exports.upsertSessionStart = upsertSessionStart;
+exports.listSessionCalls = listSessionCalls;
 exports.insertToolCall = insertToolCall;
 exports.countSameHash = countSameHash;
 exports.countTrailingSameHash = countTrailingSameHash;
@@ -293,6 +294,12 @@ function upsertSessionStart(db, sessionId, repo, startedIso, transcriptPath) {
     catch {
         /* older runs.db without the column */
     }
+}
+/** The calls a claim check or footprint reads, oldest first. Read-only. */
+function listSessionCalls(db, sessionId) {
+    return db
+        .prepare(`SELECT tool, input_summary AS summary, ok, ts FROM tool_calls WHERE session_id = ? ORDER BY seq ASC`)
+        .all(sessionId);
 }
 /**
  * Insert a tool-call row, computing seq atomically inside the statement. Doing

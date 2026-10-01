@@ -280,7 +280,8 @@ function agentItem(a, m, st, iw, on) {
         " " +
         st.fg("text", st.bold((0, term_1.clean)(a.label ?? a.name))) +
         "  " +
-        st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label), spark + " " + st.dim(`${a.calls}`.padStart(4)), iw - 1);
+        st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) +
+        claimChip(a, lv, st), spark + " " + st.dim(`${a.calls}`.padStart(4)), iw - 1);
     // Who it is and what it was asked: the mnemonic and short id are how you
     // address it, the branch and prompt are how you recognise it.
     const l2 = "  " +
@@ -297,6 +298,23 @@ function agentItem(a, m, st, iw, on) {
         l3 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
     }
     return selected(st, [l1, l2, l3], on, iw);
+}
+const CLAIM = {
+    failed: { glyph: "✗", tone: "bad", short: "checks failed" },
+    stale: { glyph: "△", tone: "warn", short: "edits untested" },
+    unverified: { glyph: "△", tone: "warn", short: "nothing run" },
+    unknown: { glyph: "?", tone: "muted", short: "result unseen" },
+    verified: { glyph: "✓", tone: "good", short: "checked" },
+};
+/**
+ * The claim verdict beside the status. Not shown while the agent is working:
+ * edits ahead of the next test run are what work in progress looks like.
+ */
+function claimChip(a, lv, st) {
+    const k = a.claim ? CLAIM[a.claim.verdict] : undefined;
+    if (!k || lv === "active")
+        return "";
+    return "  " + st.fg(k.tone, `${k.glyph} ${k.short}`);
 }
 /** How a session is named in a detail line: its label, then the name and id that address it. */
 function sessionLine(label, name, id) {
@@ -430,6 +448,12 @@ function agentDetail(a, m, st, iw) {
         ...kv(st, "session", `${(0, term_1.clean)(a.name)} · ${a.id}`, iw, "muted"),
         ...(a.branch ? kv(st, "branch", (0, term_1.clean)(a.branch), iw, "accent") : []),
         ...(a.asked ? kv(st, "asked", (0, term_1.clean)(a.asked), iw) : []),
+        ...(a.claim && CLAIM[a.claim.verdict]
+            ? [
+                ...kv(st, "claim", `${CLAIM[a.claim.verdict].glyph} ${a.claim.text}`, iw, CLAIM[a.claim.verdict].tone),
+                ...(a.claim.command ? kv(st, "", (0, term_1.clean)(a.claim.command), iw, "muted") : []),
+            ]
+            : []),
         ...kv(st, "calls", String(a.calls) + (a.startedMs != null ? ` since ${new Date(a.startedMs).toLocaleString()}` : ""), iw),
     ];
     if (a.streak > 1) {
@@ -599,6 +623,8 @@ function renderSnapshot(m, st, W) {
             const about = [a.label && a.label !== a.name ? (0, term_1.clean)(a.label) : "", a.branch ? "⎇ " + (0, term_1.clean)(a.branch) : "", a.asked ? "❯ " + (0, term_1.clean)(a.asked) : ""].filter(Boolean);
             if (about.length)
                 out.push("      " + (0, term_1.fit)(about.join(" · "), Math.max(20, W - 8)).trimEnd());
+            if (a.claim && CLAIM[a.claim.verdict])
+                out.push(`      ${CLAIM[a.claim.verdict].glyph} ${a.claim.text}`);
             if (a.steerQueued)
                 out.push(`      ✎ steer queued: ${(0, term_1.fit)((0, term_1.clean)(a.steerQueued), Math.max(20, W - 24)).trimEnd()}`);
             if (last)

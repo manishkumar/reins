@@ -105,7 +105,7 @@ function mergeHooks(settingsFile: string): MergeResult {
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
   return {
     status: "added",
-    detail: `${added} hook${added === 1 ? "" : "s"} added (PreToolUse, PostToolUse, Stop).`,
+    detail: `${added} hook${added === 1 ? "" : "s"} added (PreToolUse, PostToolUse, PostToolUseFailure, Stop).`,
   };
 }
 

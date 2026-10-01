@@ -298,7 +298,8 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
       " " +
       st.fg("text", st.bold(clean(a.label ?? a.name))) +
       "  " +
-      st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label),
+      st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) +
+      claimChip(a, lv, st),
     spark + " " + st.dim(`${a.calls}`.padStart(4)),
     iw - 1,
   );
@@ -317,6 +318,24 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
     l3 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
   }
   return selected(st, [l1, l2, l3], on, iw);
+}
+
+const CLAIM: Record<string, { glyph: string; tone: Tone; short: string }> = {
+  failed: { glyph: "✗", tone: "bad", short: "checks failed" },
+  stale: { glyph: "△", tone: "warn", short: "edits untested" },
+  unverified: { glyph: "△", tone: "warn", short: "nothing run" },
+  unknown: { glyph: "?", tone: "muted", short: "result unseen" },
+  verified: { glyph: "✓", tone: "good", short: "checked" },
+};
+
+/**
+ * The claim verdict beside the status. Not shown while the agent is working:
+ * edits ahead of the next test run are what work in progress looks like.
+ */
+function claimChip(a: AgentView, lv: Liveness, st: Style): string {
+  const k = a.claim ? CLAIM[a.claim.verdict] : undefined;
+  if (!k || lv === "active") return "";
+  return "  " + st.fg(k.tone, `${k.glyph} ${k.short}`);
 }
 
 /** How a session is named in a detail line: its label, then the name and id that address it. */
@@ -488,6 +507,12 @@ function agentDetail(a: AgentView, m: WatchModel, st: Style, iw: number): string
     ...kv(st, "session", `${clean(a.name)} · ${a.id}`, iw, "muted"),
     ...(a.branch ? kv(st, "branch", clean(a.branch), iw, "accent") : []),
     ...(a.asked ? kv(st, "asked", clean(a.asked), iw) : []),
+    ...(a.claim && CLAIM[a.claim.verdict]
+      ? [
+          ...kv(st, "claim", `${CLAIM[a.claim.verdict].glyph} ${a.claim.text}`, iw, CLAIM[a.claim.verdict].tone),
+          ...(a.claim.command ? kv(st, "", clean(a.claim.command), iw, "muted") : []),
+        ]
+      : []),
     ...kv(st, "calls", String(a.calls) + (a.startedMs != null ? ` since ${new Date(a.startedMs).toLocaleString()}` : ""), iw),
   ];
   if (a.streak > 1) {
@@ -680,6 +705,7 @@ export function renderSnapshot(m: WatchModel, st: Style, W: number): string {
       out.push(`  ${LIVE[lv].glyph} ${clean(a.name).padEnd(16)} ${a.id.slice(0, 8)}  ${(lv + since).padEnd(12)} ${String(a.calls).padStart(4)} calls`);
       const about = [a.label && a.label !== a.name ? clean(a.label) : "", a.branch ? "⎇ " + clean(a.branch) : "", a.asked ? "❯ " + clean(a.asked) : ""].filter(Boolean);
       if (about.length) out.push("      " + fit(about.join(" · "), Math.max(20, W - 8)).trimEnd());
+      if (a.claim && CLAIM[a.claim.verdict]) out.push(`      ${CLAIM[a.claim.verdict].glyph} ${a.claim.text}`);
       if (a.steerQueued) out.push(`      ✎ steer queued: ${fit(clean(a.steerQueued), Math.max(20, W - 24)).trimEnd()}`);
       if (last) out.push("      " + fit(`${last.tool}  ${clean(last.summary).replace(/\s+/g, " ")}`, Math.max(20, W - 8)).trimEnd());
     }

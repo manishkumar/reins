@@ -96,11 +96,14 @@ export function emitPreToolContext(additionalContext: string): void {
   );
 }
 
-export function emitPostToolContext(additionalContext: string): void {
+export function emitPostToolContext(
+  additionalContext: string,
+  hookEventName: "PostToolUse" | "PostToolUseFailure" = "PostToolUse",
+): void {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
-        hookEventName: "PostToolUse",
+        hookEventName,
         additionalContext,
       },
     }),

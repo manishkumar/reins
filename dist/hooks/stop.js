@@ -5,6 +5,7 @@ const util_1 = require("../util");
 const paths_1 = require("../paths");
 const transcript_1 = require("../transcript");
 const steering_1 = require("../steering");
+const config_1 = require("../config");
 /**
  * Stop: two jobs, in order.
  *
@@ -56,7 +57,9 @@ async function runStop() {
     }
     try {
         const { summarizeSession, formatSummary, clearSession } = require("../bypass");
-        const line = formatSummary(summarizeSession(cwd, sessionId), heldCount);
+        const line = [formatSummary(summarizeSession(cwd, sessionId), heldCount), claimLineAtStop(cwd, sessionId)]
+            .filter(Boolean)
+            .join("\n");
         if (line) {
             // stderr always; `systemMessage` is the field Claude Code surfaces to the
             // user, and an object carrying only that is still a passthrough — no
@@ -99,5 +102,40 @@ async function runStop() {
     }
     catch (e) {
         process.stderr.write("[reins] stop capture failed: " + String(e) + "\n");
+    }
+}
+/**
+ * The claim check, for the turn that just ended: did it leave edits failing,
+ * untested or unverified? One line for the human, or null.
+ *
+ * Said only when this turn edited code or ran a check, so a turn of pure
+ * conversation does not repeat the last turn's verdict. It is read from the
+ * capture DB, so it is best-effort and absent without SQLite. It is a
+ * report: the Stop is never blocked on it.
+ */
+function claimLineAtStop(cwd, sessionId) {
+    try {
+        if ((0, config_1.loadConfig)(cwd).claimCheck === false)
+            return null;
+        const { openDb, listSessionCalls } = require("../db");
+        const { checkClaim, claimNeedsAttention, touchesClaim } = require("../claim");
+        const { truncate } = require("../util");
+        const db = openDb(cwd);
+        if (!db)
+            return null;
+        const calls = listSessionCalls(db, sessionId);
+        // `ended` is the previous Stop: Claude Code fires Stop at every turn boundary.
+        const prev = db.prepare(`SELECT ended FROM sessions WHERE id = ?`).get(sessionId);
+        const since = prev?.ended ?? "";
+        if (!calls.some((c) => c.ts > since && touchesClaim(c)))
+            return null;
+        const claim = checkClaim(calls);
+        if (!claimNeedsAttention(claim))
+            return null;
+        const cmd = claim.command ? ` (${truncate(claim.command, 60)})` : "";
+        return `[reins] Claim check: ${claim.text}${cmd}. reins lastrun lists the calls.`;
+    }
+    catch {
+        return null;
     }
 }

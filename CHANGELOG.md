@@ -7,6 +7,21 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Added
 
+- **Sessions are named by what they are about.** The cockpit, `reins
+  sessions`, `reins pending`, `reins lastrun`, the steer picker and the report
+  lead with the title Claude Code gave the session, with its git branch and
+  your last prompt beside it. A name set with `reins name` still leads, and
+  the mnemonic and short id stay on the row as the way to address it. The
+  title is read from the tail of the session transcript, which is not a
+  documented format, so it falls back to the mnemonic when it cannot be read.
+- **Claim check.** When a turn ends, reins compares what the session did with
+  its own tool calls and reports one of: the last test or build run failed,
+  files were edited after the last run, files were edited and nothing was
+  run, the result is not visible (a piped or interrupted run), or the last
+  run passed. Failed, stale and unverified get a line at Stop; every verdict
+  is in `reins lastrun`, the cockpit and the report. It reports and never
+  blocks. `"claimCheck": false` silences the Stop line.
+
 - **`reins watch` is now a cockpit you can act from.** Three panes: NEEDS YOU
   (held actions, hold breaches, worked-around guards), AGENTS (live status,
   a 12-minute activity sparkline, last call or queued steer), and a detail
@@ -54,6 +69,15 @@ All notable changes to `reins` are documented here. Format loosely follows
 - Durations of 48 hours or more read in days (`19d 3h`).
 
 ### Fixed
+
+- **Failed tool calls were never captured.** Claude Code sends a call that
+  failed to `PostToolUseFailure`, which reins did not register. No failed
+  command reached the trajectory, a command failing on repeat never tripped
+  the loop alarm, and a held action that executed and failed was never
+  reported as a HOLD BREACH. `reins init` now wires the fourth hook, adds it
+  to an existing install without touching the rest, and `reins doctor`
+  reports an install that is missing it. **Run `reins init` and restart
+  Claude Code to pick it up.**
 
 - The per-tool and guard-fire bars in the report rendered empty. The bar was
   an inline element, so its width was ignored.

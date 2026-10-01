@@ -88,7 +88,7 @@ cd your-project
 reins init          # creates .reins/ AND wires the hooks into .claude/settings.json
 ```
 
-`reins init` does the wiring for you — it merges the three hooks (`PreToolUse`, `PostToolUse`, `Stop`) into `.claude/settings.json` (creating it if needed, never clobbering existing settings). Then **restart Claude Code in this project** so it loads them.
+`reins init` does the wiring for you — it merges the four hooks (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`) into `.claude/settings.json` (creating it if needed, never clobbering existing settings). Then **restart Claude Code in this project** so it loads them.
 
 Prefer to paste it yourself? `reins init --print` prints the block instead. Want it in `settings.local.json` (not committed)? `reins init --local`.
 
@@ -206,7 +206,7 @@ reins deny ab12cd34 --steer "open a PR instead of pushing to main"
 - **You're notified once per parked action, not once per attempt.** If the agent re-proposes something already in the queue, that's the same decision, and re-notifying would train you to ignore the line that matters. The action stays held either way — quieter is not weaker. The full queue is always `reins pending`.
 - **Defer is off unless you turn it on.** Everything in the next two bullets applies only if you set `holdTransport` to `"auto"` or `"defer"`. The default, deny-and-queue, has neither gap.
 - **Defer is print-mode only.** Claude Code silently discards a deferred decision in an interactive terminal session. With `"auto"`, reins only uses defer when it can confirm the run is headless; on Windows, or whenever it can't tell, you get deny-and-queue instead.
-- **Defer is solo-call only.** Claude Code also ignores defer when the model emitted several tool calls in one assistant message — invisible to a single `PreToolUse` invocation, so reins cannot detect it ahead of time and the held call can fall through to the normal permission flow (which may allow it under a permissive `--permission-mode`). Because that gap can't be closed at the boundary, `PostToolUse` checks the queue from the far side instead: an action that executed while still parked is reported as a **HOLD BREACH** on stderr and recorded (`reins audit`). Detection, not prevention: for a deploy or a publish, the report arrives after the fact. This is why defer is opt-in.
+- **Defer is solo-call only.** Claude Code also ignores defer when the model emitted several tool calls in one assistant message — invisible to a single `PreToolUse` invocation, so reins cannot detect it ahead of time and the held call can fall through to the normal permission flow (which may allow it under a permissive `--permission-mode`). Because that gap can't be closed at the boundary, `PostToolUse` and `PostToolUseFailure` check the queue from the far side instead: an action that executed while still parked is reported as a **HOLD BREACH**, whether or not the action itself succeeded, on stderr and recorded (`reins audit`). Detection, not prevention: for a deploy or a publish, the report arrives after the fact. This is why defer is opt-in.
 - **Approval is exact and one-shot.** By input hash for a deny-transport hold, by call id for a deferred one — either way a *changed* retry, even one flag, is a new proposal that parks again. A deny-transport approval is **scoped to the session that proposed it** (since 0.4; before that a second session running the identical command could consume the first's approval) and **to the directory it was proposed from** (earlier versions let `./deploy.sh` approved in `staging/` also run in `prod/` in the same session). `reins pending` shows the directory whenever it isn't the project root. Symlinks are resolved, so an approval given in `current/` doesn't carry over after `current` is repointed.
 - **Only the newest deferred hold in a session survives resume.** If the same session parks a second call before you get to the first, Claude Code replays only the most recent on resume — the older one won't come back. `reins pending` marks it `⏸ superseded`; approving it still files the decision, but it takes effect only if the agent proposes that action again.
 - **Same machine, same repo.** The queue is files in `.reins/` (`pending/`, `decided/` — renamed from `allowed/` in 0.4; pre-0.4 `allowed/` files are no longer read, because they were keyed by the bare input hash and any session could spend them); there's no server, so you review from a terminal on the same checkout. (Remote/notify hook-ups are deliberately out of scope for now.)
@@ -322,6 +322,39 @@ reins loops          # list sessions where loops happened
 ```
 
 Tune the threshold in `.reins/config.json` (`"loopThreshold"`).
+
+**Failed commands count, as of the `PostToolUseFailure` hook.** Claude Code sends a tool call that failed (a non-zero exit, a tool error) to `PostToolUseFailure` and not to `PostToolUse`. Installs from before reins registered that hook never captured a failed command, so a test failing on repeat never tripped this alarm and no trajectory showed a failed run. `reins init` adds the hook to an existing install without touching the rest, and `reins doctor` reports an install that is missing it. Restart Claude Code afterwards.
+
+---
+
+## Claim check
+
+An agent that edited five files and never ran a test will still tell you the tests pass. Its tool calls are the evidence, and reins reads them when a turn ends:
+
+| verdict | what the calls show |
+|---|---|
+| **failed** | the last test or build run failed |
+| **stale** | files were edited after the last test or build run |
+| **unverified** | files were edited and no test or build ran at all |
+| **unknown** | a run happened but its result is not visible to reins |
+| **verified** | the last run passed and nothing was edited after it |
+
+```
+[reins] Claim check: the last test run failed (npm test). reins lastrun lists the calls.
+```
+
+That line appears at Stop for **failed**, **stale** and **unverified**, and only when the turn edited code or ran a check, so a turn of conversation does not repeat it. Every verdict, including the quiet ones, is in `reins lastrun`, in the `reins watch` agent row and detail pane, and on each session in `reins report`. Set `"claimCheck": false` in `.reins/config.json` to silence the Stop line.
+
+**It reports and never blocks.** The Stop goes ahead, and no guard, hold or steer reads the verdict. It is deterministic: command text and exit status, no model and no network.
+
+What it can and cannot see:
+
+- **It prefers saying "unknown" to guessing.** `npm test | tail -5` exits with `tail`'s status, so reins cannot tell whether the tests passed and says so. `set -o pipefail` in the command makes the result visible. An interrupted run is unknown too.
+- **A command counts only at command position.** `grep "npm test" README.md` is not a test run. It recognizes the common runners (npm, pnpm, yarn, bun, jest, vitest, pytest, go, cargo, make, maven, gradle, dotnet and others) and build, lint and typecheck commands. A project script named something else (`./ci.sh`, `just verify`) is not recognized, so a session that used one reads as **unverified** or **stale**.
+- **Captured commands are cut at 160 characters with newlines collapsed.** A test command on the second line of a multi-line command, or past the cut, is missed or reported as unknown.
+- **Edits made through the shell are invisible.** It counts `Edit`, `Write`, `MultiEdit` and `NotebookEdit` calls. A `sed -i` or a script that rewrites files is not counted as an edit. Markdown and text files are not counted either, since a test run does not verify prose.
+- **A passing run is the agent's own run.** "verified" means the last test command the agent chose to run exited zero. It does not mean the tests cover the change.
+- **It needs capture** (SQLite, Node ≥ 22.5) and the `PostToolUseFailure` hook above. Without that hook no failed run is ever recorded, and a failing session reads as verified or stale.
 
 ---
 
@@ -450,7 +483,7 @@ echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | reins hook pre-tool
 echo '{"session_id":"demo","tool_name":"Bash","tool_input":{"command":"npm test"},"tool_response":{}}' | reins hook post-tool
 ```
 
-Useful fields per event: `session_id`, `cwd`, `tool_name`, `tool_input` (pre/post); `tool_response` (post); `transcript_path`, `reason` (stop). No output from a hook = "allow, inject nothing."
+Useful fields per event: `session_id`, `cwd`, `tool_name`, `tool_input` (pre/post); `tool_response` (post); `error`, `is_interrupt` (post-tool-failure); `transcript_path`, `reason` (stop). No output from a hook = "allow, inject nothing."
 
 Two notes for manual testing: events **without** a `session_id` don't get recorded (so quick guard/steer checks won't litter your trajectory log); and a session you record by hand will show as "still running" in `reins lastrun` until you also send a `stop` event for it.
 
@@ -527,7 +560,7 @@ reins hook pre-tool|post-tool|stop   (invoked by Claude Code, not you)
 
 ## How it works (one breath)
 
-Each hook is `reins hook <pre-tool|post-tool|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny, ask, or hold — deny-and-queue by default, or `defer` when opted in and Claude Code honors it) then steering (inject + clear). `post-tool` records the call, raises the loop alarm on consecutive repeats, and flags a `HOLD BREACH` if a still-parked action executed anyway. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run — noting any actions still parked. State lives in `.reins/`: `steering.txt`, `policy.json` (`guards.json` before 0.4, still read), `pending/`, `decided/` (`allowed/` before 0.4, no longer read), `config.json`, `runs.db`. Both the CLI and the hooks find `.reins/` by walking up to the nearest one — commands work from any subdirectory, and a tool call the agent makes after `cd`-ing into one still sees the project's own rules, steering and approval queue (the hooks' walk is bounded by `$CLAUDE_PROJECT_DIR`, so it never climbs above the session root).
+Each hook is `reins hook <pre-tool|post-tool|post-tool-failure|stop>`, reading the event JSON on stdin and replying over stdout per the Claude Code hook contract. `pre-tool` checks guards (deny, ask, or hold — deny-and-queue by default, or `defer` when opted in and Claude Code honors it) then steering (inject + clear). `post-tool` records the call, raises the loop alarm on consecutive repeats, and flags a `HOLD BREACH` if a still-parked action executed anyway; `post-tool-failure` does the same for a call that failed. `stop` delivers any still-pending steering (briefly holding the stop), then finalizes the run — noting any actions still parked, and what the session's own calls say about its work being done (the claim check). State lives in `.reins/`: `steering.txt`, `policy.json` (`guards.json` before 0.4, still read), `pending/`, `decided/` (`allowed/` before 0.4, no longer read), `config.json`, `runs.db`. Both the CLI and the hooks find `.reins/` by walking up to the nearest one — commands work from any subdirectory, and a tool call the agent makes after `cd`-ing into one still sees the project's own rules, steering and approval queue (the hooks' walk is bounded by `$CLAUDE_PROJECT_DIR`, so it never climbs above the session root).
 
 The file formats and decision semantics behind guards/steering/holds are written up separately, vendor-neutral, in [SPEC.md](SPEC.md) — not a standard, just a description of what reins does, in case another harness ever wants the same gate.
 

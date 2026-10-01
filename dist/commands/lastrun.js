@@ -8,6 +8,7 @@ const util_1 = require("../util");
 const config_1 = require("../config");
 const holds_1 = require("../holds");
 const sessionFace_1 = require("../sessionFace");
+const claim_1 = require("../claim");
 function cmdLastrun(args) {
     const db = (0, db_1.openDbReadOnly)();
     if (!db) {
@@ -43,6 +44,7 @@ function cmdLastrun(args) {
     printTrajectory(calls, threshold);
     console.log("");
     printSummary(calls, threshold);
+    printClaim(calls);
     printDecisions(db, session.id);
     printAwaiting(session.id);
     return 0;
@@ -99,6 +101,18 @@ function printAwaiting(sessionId) {
     for (const p of pending) {
         console.log(`    ${format_1.c.cyan(p.id)}  ${p.tool}  ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}`);
     }
+}
+/** What the session's own calls say about its work being done (src/claim.ts). */
+function printClaim(calls) {
+    const claim = (0, claim_1.checkClaim)(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })));
+    if (claim.verdict === "none")
+        return;
+    const tone = claim.verdict === "failed" ? format_1.c.red : claim.verdict === "verified" ? format_1.c.green : claim.verdict === "unknown" ? format_1.c.dim : format_1.c.yellow;
+    console.log("");
+    console.log(format_1.c.bold("Claim check") + format_1.c.dim("  (from this session's own calls; reports, never blocks)"));
+    console.log(`  ${tone(claim.text)}`);
+    if (claim.command)
+        console.log(`  ${format_1.c.dim((0, util_1.truncate)(claim.command, 110))}`);
 }
 function printHeader(s, callCount, face) {
     const dur = duration(s.started, s.ended);

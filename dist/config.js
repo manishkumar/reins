@@ -41,6 +41,7 @@ const paths_1 = require("./paths");
 const DEFAULTS = {
     loopThreshold: 3,
     holdTransport: "deny",
+    claimCheck: true,
 };
 exports.DEFAULT_CONFIG = DEFAULTS;
 function loadConfig(payloadCwd) {

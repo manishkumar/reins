@@ -6,10 +6,15 @@ const paths_1 = require("../paths");
 const config_1 = require("../config");
 const hookio_1 = require("../hookio");
 /**
- * PostToolUse: record the executed call, then raise the loop alarm if this exact
- * (tool + input) has now repeated >= the configured threshold.
+ * PostToolUse and PostToolUseFailure: record the executed call, then raise the
+ * loop alarm if this exact (tool + input) has now repeated >= the configured
+ * threshold.
+ *
+ * Claude Code splits the two: a call that failed (a non-zero exit, a tool
+ * error) goes only to PostToolUseFailure. `failed` is that event. A failing
+ * call still executed, so the breach and bypass checks below run for it too.
  */
-async function runPostTool() {
+async function runPostTool(failed = false) {
     const payload = await (0, util_1.readStdinJson)();
     const cwd = payload.cwd || undefined;
     const sessionId = payload.session_id || "";
@@ -18,7 +23,8 @@ async function runPostTool() {
     const toolResponse = payload.tool_response;
     const inputHash = (0, util_1.hashToolInput)(toolName, toolInput);
     const summary = (0, util_1.summarizeToolInput)(toolName, toolInput);
-    const ok = inferOk(toolResponse);
+    // An interrupted call says nothing about whether the command works.
+    const ok = failed ? (payload.is_interrupt === true ? null : 0) : inferOk(toolResponse);
     let repeatCount = 0;
     try {
         const { openDb, upsertSessionStart, insertToolCall, countTrailingSameHash, } = require("../db");
@@ -89,7 +95,7 @@ async function runPostTool() {
             `This usually means the current approach is stuck. Stop repeating it and ` +
             `try something different — change the input, inspect why it isn't working, ` +
             `or ask the developer.`;
-        (0, hookio_1.emitPostToolContext)(warning);
+        (0, hookio_1.emitPostToolContext)(warning, failed ? "PostToolUseFailure" : "PostToolUse");
         process.stderr.write(warning + "\n");
     }
 }

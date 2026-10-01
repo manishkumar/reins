@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import type { SqlDb } from "../store";
-import { hasSessionNameColumn, hasSessionTranscriptColumn } from "../db";
+import { hasSessionNameColumn, hasSessionTranscriptColumn, listSessionCalls } from "../db";
+import { checkClaim, type Claim } from "../claim";
 import { faceReader, sessionFace, type SessionFace } from "../sessionFace";
 import { listPending, proposalWorkdir, type PendingAction } from "../holds";
 import { supersededDeferIds } from "../holdActions";
@@ -51,6 +52,8 @@ export interface AgentView extends SessionFace {
   /** Newest last. Deep for the selected agent, a short tail for the rest. */
   trajectory: CallView[];
   holds: number;
+  /** What the session's own calls say about its work being done (src/claim.ts). */
+  claim: Claim;
 }
 
 export interface HoldView {
@@ -204,12 +207,24 @@ function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): 
         spark,
         trajectory,
         holds: 0,
+        claim: claimOf(db, r.id, r.calls),
       });
     }
   } catch {
     /* DB momentarily locked by a writer: render what we have */
   }
   return out;
+}
+
+/** A session's verdict changes only when it makes a call, so it is computed once per call count. */
+const claims = new Map<string, { calls: number; claim: Claim }>();
+
+function claimOf(db: SqlDb, id: string, calls: number): Claim {
+  const hit = claims.get(id);
+  if (hit && hit.calls === calls) return hit.claim;
+  const claim = checkClaim(listSessionCalls(db, id));
+  claims.set(id, { calls, claim });
+  return claim;
 }
 
 function toCall(

@@ -1,3 +1,4 @@
+import { SETTINGS_BLOCK } from "../settingsBlock";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { reinsDir, steeringPath } from "../paths";
@@ -122,12 +123,19 @@ export function cmdDoctor(): number {
   // Hook wiring
   console.log("");
   console.log(c.bold("Hook wiring (.claude)"));
-  const wiredAnywhere =
-    checkSettings(path.join(process.cwd(), ".claude", "settings.json"), "settings.json", line) ||
-    checkSettings(path.join(process.cwd(), ".claude", "settings.local.json"), "settings.local.json", line);
-  if (!wiredAnywhere) {
+  const wiring = [
+    checkSettings(path.join(process.cwd(), ".claude", "settings.json"), "settings.json", line),
+    checkSettings(path.join(process.cwd(), ".claude", "settings.local.json"), "settings.local.json", line),
+  ];
+  if (!wiring.includes("full")) {
     problems++;
-    line(WARN, "hooks", "not wired — run `reins init` (or `reins init --print`)");
+    line(
+      WARN,
+      "hooks",
+      wiring.includes("partial")
+        ? "partly wired — run `reins init` to add the missing ones (it merges, and keeps what is there)"
+        : "not wired — run `reins init` (or `reins init --print`)",
+    );
   }
 
   // PATH
@@ -154,24 +162,30 @@ function checkSettings(
   file: string,
   label: string,
   line: (sym: string, label: string, detail: string) => void,
-): boolean {
-  if (!fs.existsSync(file)) return false;
+): "full" | "partial" | "none" {
+  if (!fs.existsSync(file)) return "none";
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(fs.readFileSync(file, "utf8") || "{}");
   } catch {
     line(BAD, label, "exists but is not valid JSON");
-    return false;
+    return "none";
   }
   const hooks = (parsed.hooks ?? {}) as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
-  const events = ["PreToolUse", "PostToolUse", "Stop"];
+  const events = Object.keys(SETTINGS_BLOCK.hooks);
   const wired = events.filter((ev) =>
     (hooks[ev] ?? []).some((e) => (e.hooks ?? []).some((h) => (h.command ?? "").includes("reins hook"))),
   );
-  if (wired.length === 0) return false;
-  const sym = wired.length === events.length ? OK : WARN;
-  line(sym, label, `${wired.join(", ")} wired`);
-  return wired.length === events.length;
+  if (wired.length === 0) return "none";
+  const missing = events.filter((ev) => !wired.includes(ev));
+  if (missing.length === 0) {
+    line(OK, label, `${wired.join(", ")} wired`);
+    return "full";
+  }
+  // An install from before a hook existed. The usual one is PostToolUseFailure:
+  // without it, failed commands are not captured and never trip the loop alarm.
+  line(WARN, label, `${wired.join(", ")} wired; missing ${missing.join(", ")}`);
+  return "partial";
 }
 
 /**

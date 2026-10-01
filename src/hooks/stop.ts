@@ -2,6 +2,7 @@ import { readStdinJson, nowIso } from "../util";
 import { resolveProjectDir } from "../paths";
 import { readTranscriptTotals } from "../transcript";
 import { consumeSteering, formatSteeringStopReason } from "../steering";
+import { loadConfig } from "../config";
 
 /**
  * Stop: two jobs, in order.
@@ -57,7 +58,9 @@ export async function runStop(): Promise<void> {
   try {
     const { summarizeSession, formatSummary, clearSession } =
       require("../bypass") as typeof import("../bypass");
-    const line = formatSummary(summarizeSession(cwd, sessionId), heldCount);
+    const line = [formatSummary(summarizeSession(cwd, sessionId), heldCount), claimLineAtStop(cwd, sessionId)]
+      .filter(Boolean)
+      .join("\n");
     if (line) {
       // stderr always; `systemMessage` is the field Claude Code surfaces to the
       // user, and an object carrying only that is still a passthrough — no
@@ -103,5 +106,36 @@ export async function runStop(): Promise<void> {
     insertOutcome(db, sessionId, outcome, gateResult);
   } catch (e) {
     process.stderr.write("[reins] stop capture failed: " + String(e) + "\n");
+  }
+}
+
+/**
+ * The claim check, for the turn that just ended: did it leave edits failing,
+ * untested or unverified? One line for the human, or null.
+ *
+ * Said only when this turn edited code or ran a check, so a turn of pure
+ * conversation does not repeat the last turn's verdict. It is read from the
+ * capture DB, so it is best-effort and absent without SQLite. It is a
+ * report: the Stop is never blocked on it.
+ */
+function claimLineAtStop(cwd: string | undefined, sessionId: string): string | null {
+  try {
+    if (loadConfig(cwd).claimCheck === false) return null;
+    const { openDb, listSessionCalls } = require("../db") as typeof import("../db");
+    const { checkClaim, claimNeedsAttention, touchesClaim } = require("../claim") as typeof import("../claim");
+    const { truncate } = require("../util") as typeof import("../util");
+    const db = openDb(cwd);
+    if (!db) return null;
+    const calls = listSessionCalls(db, sessionId);
+    // `ended` is the previous Stop: Claude Code fires Stop at every turn boundary.
+    const prev = db.prepare(`SELECT ended FROM sessions WHERE id = ?`).get(sessionId) as { ended: string | null } | undefined;
+    const since = prev?.ended ?? "";
+    if (!calls.some((c) => c.ts > since && touchesClaim(c))) return null;
+    const claim = checkClaim(calls);
+    if (!claimNeedsAttention(claim)) return null;
+    const cmd = claim.command ? ` (${truncate(claim.command, 60)})` : "";
+    return `[reins] Claim check: ${claim.text}${cmd}. reins lastrun lists the calls.`;
+  } catch {
+    return null;
   }
 }

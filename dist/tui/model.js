@@ -38,6 +38,7 @@ exports.buildWatchModel = buildWatchModel;
 exports.liveness = liveness;
 const path = __importStar(require("node:path"));
 const db_1 = require("../db");
+const claim_1 = require("../claim");
 const sessionFace_1 = require("../sessionFace");
 const holds_1 = require("../holds");
 const holdActions_1 = require("../holdActions");
@@ -152,6 +153,7 @@ function readAgents(db, threshold, nowMs, o) {
                 spark,
                 trajectory,
                 holds: 0,
+                claim: claimOf(db, r.id, r.calls),
             });
         }
     }
@@ -159,6 +161,16 @@ function readAgents(db, threshold, nowMs, o) {
         /* DB momentarily locked by a writer: render what we have */
     }
     return out;
+}
+/** A session's verdict changes only when it makes a call, so it is computed once per call count. */
+const claims = new Map();
+function claimOf(db, id, calls) {
+    const hit = claims.get(id);
+    if (hit && hit.calls === calls)
+        return hit.claim;
+    const claim = (0, claim_1.checkClaim)((0, db_1.listSessionCalls)(db, id));
+    claims.set(id, { calls, claim });
+    return claim;
 }
 function toCall(cr, streak) {
     const m = cr.input_summary.match(TAGGED);

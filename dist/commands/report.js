@@ -43,6 +43,7 @@ const store_1 = require("../store");
 const config_1 = require("../config");
 const paths_1 = require("../paths");
 const sessionFace_1 = require("../sessionFace");
+const claim_1 = require("../claim");
 const format_1 = require("./format");
 /** DENIED/ASKED rows carry the rule that stopped them: "… [guard:<id>]". */
 const GUARD_TAG = /\s\[guard:([^\]]+)\]$/;
@@ -176,6 +177,7 @@ function collect(db, repo, threshold) {
         sessions.push({
             id: s.id,
             face: faceOf(s.id),
+            claim: (0, claim_1.checkClaim)(callRows.map((cr) => ({ tool: cr.tool, summary: cr.input_summary, ok: cr.ok }))),
             started: s.started,
             ended: s.ended,
             outcome: s.final_outcome,
@@ -263,6 +265,11 @@ details.session > summary { cursor: pointer; padding: 12px 16px; list-style: non
 details.session > summary::-webkit-details-marker { display: none; }
 .sid { color: #58a6ff; font-weight: 700; }
 .about { color: #7d8590; font-size: 12px; padding: 0 14px 8px; }
+.claim { font-size: 12px; padding: 0 14px 8px; color: #7d8590; }
+.claim.failed { color: #f85149; }
+.claim.stale, .claim.unverified { color: #d29922; }
+.claim.verified { color: #3fb950; }
+.claim code { color: #7d8590; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid #232b35; color: #7d8590; }
 .badge.completed { color: #3fb950; border-color: #1f3d28; }
 .badge.running { color: #e3b341; border-color: #3d3417; }
@@ -425,9 +432,15 @@ function sessionSection(s, flagged = true) {
   <span class="badge ${badgeClass}">${esc(status)}</span>
   <span class="meta">${esc(when)} · ${bits.map(esc).join(" · ")}</span>
 </summary>
-${about ? `<div class="about">${esc(about)}</div>` : ""}
+${about ? `<div class="about">${esc(about)}</div>` : ""}${claimLine(s.claim)}
 <div class="traj">${rows}</div>
 </details>`;
+}
+function claimLine(claim) {
+    if (!claim || claim.verdict === "none")
+        return "";
+    const cmd = claim.command ? ` <code>${esc(claim.command)}</code>` : "";
+    return `\n<div class="claim ${claim.verdict}">Claim check: ${esc(claim.text)}.${cmd}</div>`;
 }
 function trajRow(call) {
     const kind = call.denied ? "deny" : call.asked ? "ask" : call.failed ? "fail" : "ok";

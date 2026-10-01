@@ -5,6 +5,7 @@ import { truncate, summarizeToolInput } from "../util";
 import { loadConfig } from "../config";
 import { pendingForSession } from "../holds";
 import { faceReader, type SessionFace } from "../sessionFace";
+import { checkClaim } from "../claim";
 
 interface SessionRow {
   id: string;
@@ -62,6 +63,7 @@ export function cmdLastrun(args: string[]): number {
   printTrajectory(calls, threshold);
   console.log("");
   printSummary(calls, threshold);
+  printClaim(calls);
   printDecisions(db, session.id);
   printAwaiting(session.id);
   return 0;
@@ -116,6 +118,17 @@ function printAwaiting(sessionId: string): void {
   for (const p of pending) {
     console.log(`    ${c.cyan(p.id)}  ${p.tool}  ${truncate(summarizeToolInput(p.tool, p.input), 70)}`);
   }
+}
+
+/** What the session's own calls say about its work being done (src/claim.ts). */
+function printClaim(calls: CallRow[]): void {
+  const claim = checkClaim(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })));
+  if (claim.verdict === "none") return;
+  const tone = claim.verdict === "failed" ? c.red : claim.verdict === "verified" ? c.green : claim.verdict === "unknown" ? c.dim : c.yellow;
+  console.log("");
+  console.log(c.bold("Claim check") + c.dim("  (from this session's own calls; reports, never blocks)"));
+  console.log(`  ${tone(claim.text)}`);
+  if (claim.command) console.log(`  ${c.dim(truncate(claim.command, 110))}`);
 }
 
 function printHeader(s: SessionRow, callCount: number, face: SessionFace): void {

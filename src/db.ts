@@ -305,6 +305,16 @@ export function upsertSessionStart(
   }
 }
 
+/** The calls a claim check or footprint reads, oldest first. Read-only. */
+export function listSessionCalls(
+  db: SqlDb,
+  sessionId: string,
+): Array<{ tool: string; summary: string; ok: number | null; ts: string }> {
+  return db
+    .prepare(`SELECT tool, input_summary AS summary, ok, ts FROM tool_calls WHERE session_id = ? ORDER BY seq ASC`)
+    .all(sessionId) as Array<{ tool: string; summary: string; ok: number | null; ts: string }>;
+}
+
 export interface ToolCallRow {
   session_id: string;
   tool: string;
