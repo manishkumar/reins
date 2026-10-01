@@ -40,6 +40,7 @@ const readline = __importStar(require("node:readline"));
 const steering_1 = require("../steering");
 const db_1 = require("../db");
 const names_1 = require("../names");
+const sessionFace_1 = require("../sessionFace");
 const format_1 = require("./format");
 /**
  * Sessions with activity inside this window are offered by the picker. Wider
@@ -110,11 +111,13 @@ async function cmdSteer(args) {
  */
 async function pickSession() {
     let rows = [];
+    let faceOf = (0, sessionFace_1.faceReader)(null);
     try {
         const db = (0, db_1.openDbReadOnly)();
         if (!db)
             return undefined; // no capture — nothing to list, broadcast as ever
         rows = (0, db_1.recentActiveSessions)(db, Date.now(), PICKER_WINDOW_MS);
+        faceOf = (0, sessionFace_1.faceReader)(db);
     }
     catch {
         return undefined; // a flaky DB must never block a steer
@@ -123,7 +126,7 @@ async function pickSession() {
         return undefined;
     const nowMs = Date.now();
     console.log(format_1.c.bold("Several sessions are live — where should this steer land?"));
-    rows.forEach((r, i) => console.log(formatPickerRow(r, i, nowMs)));
+    rows.forEach((r, i) => console.log(formatPickerRow(r, i, nowMs, faceOf(r.id))));
     console.log("  " + format_1.c.cyan("a") + format_1.c.dim(". all — broadcast; whichever session moves next consumes it"));
     for (;;) {
         const answer = await promptLine(format_1.c.dim(`Choose [1-${rows.length}, a=all, q=quit] (default a): `));
@@ -151,9 +154,14 @@ function parsePickerChoice(answer, count) {
     }
     return { kind: "invalid" };
 }
-/** One numbered picker row: name, id, liveness, and the last call as context. */
-function formatPickerRow(r, index, nowMs) {
-    const name = (0, names_1.displayName)(r.id, r.name);
+/**
+ * One numbered picker row: what the session is about, liveness, and the last
+ * call; then the name and id that address it, its branch and last prompt.
+ */
+function formatPickerRow(r, index, nowMs, face) {
+    const f = face ?? (0, sessionFace_1.sessionFace)(r.id, r.name);
+    const head = (0, sessionFace_1.headOf)(f, r.id);
+    const about = (0, sessionFace_1.aboutOf)(f, r.id);
     const age = r.lastTsMs != null ? nowMs - r.lastTsMs : null;
     const live = age != null && age < ACTIVE_MS;
     const status = live ? format_1.c.yellow("● active") : format_1.c.dim(`○ idle ${age != null ? formatAge(age) : "?"}`);
@@ -162,8 +170,8 @@ function formatPickerRow(r, index, nowMs) {
         ? format_1.c.dim(`  ${r.lastTool}: ${truncateFlat(r.lastSummary, 40)}`)
         : "";
     const steer = peekQueued(r.id) ? "  " + format_1.c.magenta("✎ steer queued") : "";
-    return (`  ${format_1.c.cyan(String(index + 1))}. ${format_1.c.bold(pad(name, 16))} ${format_1.c.dim(short(r.id))}  ` +
-        `${status}  ${meta}${last}${steer}`);
+    return (`  ${format_1.c.cyan(String(index + 1))}. ${format_1.c.bold(pad(head, 24))}  ${status}  ${meta}${last}${steer}` +
+        (about ? `\n     ${format_1.c.dim(about)}` : ""));
 }
 function peekQueued(sessionId) {
     try {

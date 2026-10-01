@@ -41,6 +41,8 @@ const paths_1 = require("../paths");
 const holds_1 = require("../holds");
 const holdActions_1 = require("../holdActions");
 const util_1 = require("../util");
+const db_1 = require("../db");
+const sessionFace_1 = require("../sessionFace");
 const format_1 = require("./format");
 /** `reins pending` — the review queue: every action a hold rule parked. */
 function cmdPending() {
@@ -54,6 +56,16 @@ function cmdPending() {
     // entry still files the decision, but nothing will come back for it in that
     // session — so say so plainly instead of letting the human believe otherwise.
     const superseded = (0, holdActions_1.supersededDeferIds)(pending);
+    // Which session asked, in words. Best-effort: the queue itself is plain
+    // files and lists without the DB, with mnemonics.
+    let db = null;
+    try {
+        db = (0, db_1.openDbReadOnly)();
+    }
+    catch {
+        /* capture unavailable */
+    }
+    const faceOf = (0, sessionFace_1.faceReader)(db);
     console.log(format_1.c.bold("Pending actions") + format_1.c.dim(" — parked by hold rules, awaiting your decision"));
     console.log("");
     for (const p of pending) {
@@ -62,7 +74,7 @@ function cmdPending() {
             : superseded.has(p.id)
                 ? format_1.c.dim(" ⏸ superseded")
                 : format_1.c.dim(" ⏸ in session");
-        console.log(`  ${format_1.c.cyan(p.id)}  ${format_1.c.dim(age(p.ts).padEnd(8))} ${format_1.c.dim(shortId(p.session_id).padEnd(9))}` +
+        console.log(`  ${format_1.c.cyan(p.id)}  ${format_1.c.dim(age(p.ts).padEnd(8))} ${format_1.c.dim((0, sessionFace_1.shortId)(p.session_id).padEnd(9))}` +
             ` ${p.tool.padEnd(8)} ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}` +
             ` ${format_1.c.dim(`[${p.rule_id}]`)}${mark}`);
         // The directory is part of what gets approved, so the approver sees it
@@ -70,6 +82,9 @@ function cmdPending() {
         const where = workdirLabel(p.cwd);
         if (where)
             console.log(`            ${format_1.c.dim("in " + where)}`);
+        const face = faceOf(p.session_id);
+        const about = (0, sessionFace_1.aboutOf)(face, p.session_id);
+        console.log(`            ${format_1.c.dim("from " + (0, sessionFace_1.headOf)(face, p.session_id) + (about ? " · " + about : ""))}`);
     }
     console.log("");
     console.log(format_1.c.dim("Approve one: ") +
@@ -166,9 +181,6 @@ function resolveId(idArg, verb) {
         return null;
     }
     return matches[0];
-}
-function shortId(id) {
-    return id.length > 8 ? id.slice(0, 8) : id;
 }
 function age(tsIso) {
     const ms = Date.now() - new Date(tsIso).getTime();

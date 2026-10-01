@@ -113,7 +113,9 @@ function parseTail(text) {
 function text1(v) {
     if (typeof v !== "string")
         return null;
-    const t = v.replace(/\s+/g, " ").trim();
+    // Control characters go here, at the source, so no surface can print an
+    // escape sequence from a transcript by forgetting to sanitize.
+    const t = v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
     return t || null;
 }
 function unescape(raw) {

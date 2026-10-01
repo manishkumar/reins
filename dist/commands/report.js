@@ -42,6 +42,7 @@ const attention_1 = require("../attention");
 const store_1 = require("../store");
 const config_1 = require("../config");
 const paths_1 = require("../paths");
+const sessionFace_1 = require("../sessionFace");
 const format_1 = require("./format");
 /** DENIED/ASKED rows carry the rule that stopped them: "… [guard:<id>]". */
 const GUARD_TAG = /\s\[guard:([^\]]+)\]$/;
@@ -106,6 +107,7 @@ function collect(db, repo, threshold) {
         GROUP BY s.id
         ORDER BY COALESCE(MAX(t.ts), s.started) DESC`)
         .all();
+    const faceOf = (0, sessionFace_1.faceReader)(db);
     const sessions = [];
     const totals = {
         sessions: 0,
@@ -173,6 +175,7 @@ function collect(db, repo, threshold) {
             : null;
         sessions.push({
             id: s.id,
+            face: faceOf(s.id),
             started: s.started,
             ended: s.ended,
             outcome: s.final_outcome,
@@ -259,6 +262,7 @@ details.session > summary { cursor: pointer; padding: 12px 16px; list-style: non
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 details.session > summary::-webkit-details-marker { display: none; }
 .sid { color: #58a6ff; font-weight: 700; }
+.about { color: #7d8590; font-size: 12px; padding: 0 14px 8px; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid #232b35; color: #7d8590; }
 .badge.completed { color: #3fb950; border-color: #1f3d28; }
 .badge.running { color: #e3b341; border-color: #3d3417; }
@@ -321,6 +325,11 @@ function attentionSection(d) {
     const a = d.attention;
     if (!a)
         return "";
+    const faces = new Map(d.sessions.map((s) => [s.id, s.face]));
+    const who = (id) => {
+        const f = faces.get(id);
+        return f ? `${(0, sessionFace_1.headOf)(f, id)}${f.label === f.name ? "" : ` (${(0, sessionFace_1.shortId)(id)})`}` : `session ${(0, sessionFace_1.shortId)(id)}`;
+    };
     const older = a.olderEvents
         ? `<div class="cmds">${a.olderEvents} older breach/bypass event${a.olderEvents === 1 ? "" : "s"} not listed: <code>reins audit --guards</code></div>`
         : "";
@@ -331,7 +340,7 @@ function attentionSection(d) {
     const holds = a.holds.map((h) => {
         const waited = Number.isFinite(now - Date.parse(h.ts)) ? ` · waiting ${humanDuration(Math.max(0, now - Date.parse(h.ts)))}` : "";
         return `<div class="item">
-<div class="head"><span class="kind hold">✋ held</span><span class="tool">${esc(h.tool)}</span><span class="rule">${esc(h.ruleId)}</span><span class="meta">session ${esc(shortId(h.sessionId))}${esc(waited)}</span></div>
+<div class="head"><span class="kind hold">✋ held</span><span class="tool">${esc(h.tool)}</span><span class="rule">${esc(h.ruleId)}</span><span class="meta">${esc(who(h.sessionId))}${esc(waited)}</span></div>
 <div class="why">${esc(h.reason)}</div>
 <pre>${esc(h.input)}</pre>
 <div class="cmds"><code>reins approve ${esc(h.id)}</code> or <code>reins deny ${esc(h.id)}</code></div>
@@ -341,7 +350,7 @@ function attentionSection(d) {
         const label = e.kind === "breach" ? "⚠ hold breached" : "↪ guard worked around";
         const rule = e.ruleId ? `<span class="rule">${esc(e.ruleId)}</span>` : "";
         return `<div class="item">
-<div class="head"><span class="kind ${e.kind}">${label}</span><span class="tool">${esc(e.tool)}</span>${rule}<span class="meta">session ${esc(shortId(e.sessionId))} · ${esc(e.ts.replace("T", " ").replace(/\..*/, ""))}</span></div>
+<div class="head"><span class="kind ${e.kind}">${label}</span><span class="tool">${esc(e.tool)}</span>${rule}<span class="meta">${esc(who(e.sessionId))} · ${esc(e.ts.replace("T", " ").replace(/\..*/, ""))}</span></div>
 <div class="why">${esc(e.detail)}</div>
 <pre>${esc(e.summary)}</pre>
 </div>`;
@@ -409,12 +418,14 @@ function sessionSection(s, flagged = true) {
     // one, or one with a "needs you" item. The rest collapse to their summary
     // line, which already carries the blocked/loop counts.
     const open = !s.ended || flagged;
+    const about = s.face ? (0, sessionFace_1.aboutOf)(s.face, s.id, 200) : "";
     return `<details class="session"${open ? " open" : ""}>
 <summary>
-  <span class="sid">${esc(shortId(s.id))}</span>
+  <span class="sid">${esc(s.face ? (0, sessionFace_1.headOf)(s.face, s.id) : (0, sessionFace_1.shortId)(s.id))}</span>
   <span class="badge ${badgeClass}">${esc(status)}</span>
   <span class="meta">${esc(when)} · ${bits.map(esc).join(" · ")}</span>
 </summary>
+${about ? `<div class="about">${esc(about)}</div>` : ""}
 <div class="traj">${rows}</div>
 </details>`;
 }
@@ -445,9 +456,6 @@ function esc(s) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#39;");
-}
-function shortId(id) {
-    return id.length > 8 ? id.slice(0, 8) : id;
 }
 function humanDuration(ms) {
     const s = Math.round(ms / 1000);

@@ -1,8 +1,7 @@
 import * as path from "node:path";
 import type { SqlDb } from "../store";
 import { hasSessionNameColumn, hasSessionTranscriptColumn } from "../db";
-import { displayName } from "../names";
-import { readSessionContext } from "../sessionContext";
+import { faceReader, sessionFace, type SessionFace } from "../sessionFace";
 import { listPending, proposalWorkdir, type PendingAction } from "../holds";
 import { supersededDeferIds } from "../holdActions";
 import { collectAttention, describeInput, type AttentionEvent } from "../attention";
@@ -37,15 +36,8 @@ export interface CallView {
 
 export type Liveness = "active" | "looping" | "idle" | "done";
 
-export interface AgentView {
+export interface AgentView extends SessionFace {
   id: string;
-  /** The name `reins steer` accepts: the custom one, else the mnemonic. */
-  name: string;
-  /** What the row leads with: the custom name, else the session's title, else the mnemonic. */
-  label: string;
-  /** The human's most recent prompt, from the transcript. */
-  asked: string | null;
-  branch: string | null;
   ended: boolean;
   outcome: string | null;
   calls: number;
@@ -101,11 +93,8 @@ export function buildWatchModel(db: SqlDb | null, repo: string, threshold: numbe
   const nowMs = o.nowMs ?? Date.now();
   const agents = db ? readAgents(db, threshold, nowMs, o) : [];
   const known = new Map<string, SessionFace>(agents.map((a) => [a.id, a]));
-  const faceOf = (id: string): SessionFace => {
-    let f = known.get(id);
-    if (!f) known.set(id, (f = db ? readFace(db, id) : face(id, null, null)));
-    return f;
-  };
+  const lookup = faceReader(db);
+  const faceOf = (id: string): SessionFace => known.get(id) ?? lookup(id);
 
   const pending = listPending(repo);
   const superseded = supersededDeferIds(pending);
@@ -141,28 +130,6 @@ export function buildWatchModel(db: SqlDb | null, repo: string, threshold: numbe
     agents,
     broadcast,
   };
-}
-
-type SessionFace = Pick<AgentView, "name" | "label" | "asked" | "branch">;
-
-/** How a session is shown. The transcript supplies the title; without one the mnemonic leads. */
-function face(id: string, custom: string | null | undefined, transcript: string | null | undefined): SessionFace {
-  const ctx = readSessionContext(transcript);
-  const name = displayName(id, custom);
-  return { name, label: (custom ?? "").trim() || ctx.title || name, asked: ctx.asked, branch: ctx.branch };
-}
-
-/** A hold's session can be older than the agent list reaches; look it up on its own. */
-function readFace(db: SqlDb, id: string): SessionFace {
-  try {
-    const cols = [hasSessionNameColumn(db) ? "name" : "NULL AS name", hasSessionTranscriptColumn(db) ? "transcript" : "NULL AS transcript"];
-    const r = db.prepare(`SELECT ${cols.join(", ")} FROM sessions WHERE id = ?`).get(id) as
-      | { name: string | null; transcript: string | null }
-      | undefined;
-    return face(id, r?.name, r?.transcript);
-  } catch {
-    return face(id, null, null);
-  }
 }
 
 function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): AgentView[] {
@@ -226,7 +193,7 @@ function readAgents(db: SqlDb, threshold: number, nowMs: number, o: BuildOpts): 
       const last = r.last_ts || r.started;
       out.push({
         id: r.id,
-        ...face(r.id, r.name, r.transcript),
+        ...sessionFace(r.id, r.name, r.transcript),
         ended: !!r.ended,
         outcome: r.final_outcome,
         calls: r.calls,

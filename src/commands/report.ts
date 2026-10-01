@@ -5,6 +5,7 @@ import { collectAttention, type Attention } from "../attention";
 import { capabilityNote } from "../store";
 import { loadConfig } from "../config";
 import { resolveProjectDir, reinsDir } from "../paths";
+import { aboutOf, faceReader, headOf, shortId, type SessionFace } from "../sessionFace";
 import { c } from "./format";
 
 /**
@@ -30,6 +31,8 @@ export interface ReportCall {
 
 export interface ReportSession {
   id: string;
+  /** How the session is named everywhere else; absent in data built without it. */
+  face?: SessionFace;
   started: string | null;
   ended: string | null;
   outcome: string | null;
@@ -162,6 +165,7 @@ function collect(
     last_ts: string | null;
   }>;
 
+  const faceOf = faceReader(db);
   const sessions: ReportSession[] = [];
   const totals = {
     sessions: 0,
@@ -230,6 +234,7 @@ function collect(
 
     sessions.push({
       id: s.id,
+      face: faceOf(s.id),
       started: s.started,
       ended: s.ended,
       outcome: s.final_outcome,
@@ -322,6 +327,7 @@ details.session > summary { cursor: pointer; padding: 12px 16px; list-style: non
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 details.session > summary::-webkit-details-marker { display: none; }
 .sid { color: #58a6ff; font-weight: 700; }
+.about { color: #7d8590; font-size: 12px; padding: 0 14px 8px; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid #232b35; color: #7d8590; }
 .badge.completed { color: #3fb950; border-color: #1f3d28; }
 .badge.running { color: #e3b341; border-color: #3d3417; }
@@ -384,6 +390,11 @@ ${sessions}
 function attentionSection(d: ReportData): string {
   const a = d.attention;
   if (!a) return "";
+  const faces = new Map(d.sessions.map((s) => [s.id, s.face]));
+  const who = (id: string): string => {
+    const f = faces.get(id);
+    return f ? `${headOf(f, id)}${f.label === f.name ? "" : ` (${shortId(id)})`}` : `session ${shortId(id)}`;
+  };
   const older = a.olderEvents
     ? `<div class="cmds">${a.olderEvents} older breach/bypass event${a.olderEvents === 1 ? "" : "s"} not listed: <code>reins audit --guards</code></div>`
     : "";
@@ -394,7 +405,7 @@ function attentionSection(d: ReportData): string {
   const holds = a.holds.map((h) => {
     const waited = Number.isFinite(now - Date.parse(h.ts)) ? ` · waiting ${humanDuration(Math.max(0, now - Date.parse(h.ts)))}` : "";
     return `<div class="item">
-<div class="head"><span class="kind hold">✋ held</span><span class="tool">${esc(h.tool)}</span><span class="rule">${esc(h.ruleId)}</span><span class="meta">session ${esc(shortId(h.sessionId))}${esc(waited)}</span></div>
+<div class="head"><span class="kind hold">✋ held</span><span class="tool">${esc(h.tool)}</span><span class="rule">${esc(h.ruleId)}</span><span class="meta">${esc(who(h.sessionId))}${esc(waited)}</span></div>
 <div class="why">${esc(h.reason)}</div>
 <pre>${esc(h.input)}</pre>
 <div class="cmds"><code>reins approve ${esc(h.id)}</code> or <code>reins deny ${esc(h.id)}</code></div>
@@ -404,7 +415,7 @@ function attentionSection(d: ReportData): string {
     const label = e.kind === "breach" ? "⚠ hold breached" : "↪ guard worked around";
     const rule = e.ruleId ? `<span class="rule">${esc(e.ruleId)}</span>` : "";
     return `<div class="item">
-<div class="head"><span class="kind ${e.kind}">${label}</span><span class="tool">${esc(e.tool)}</span>${rule}<span class="meta">session ${esc(shortId(e.sessionId))} · ${esc(e.ts.replace("T", " ").replace(/\..*/, ""))}</span></div>
+<div class="head"><span class="kind ${e.kind}">${label}</span><span class="tool">${esc(e.tool)}</span>${rule}<span class="meta">${esc(who(e.sessionId))} · ${esc(e.ts.replace("T", " ").replace(/\..*/, ""))}</span></div>
 <div class="why">${esc(e.detail)}</div>
 <pre>${esc(e.summary)}</pre>
 </div>`;
@@ -466,12 +477,14 @@ function sessionSection(s: ReportSession, flagged = true): string {
   // one, or one with a "needs you" item. The rest collapse to their summary
   // line, which already carries the blocked/loop counts.
   const open = !s.ended || flagged;
+  const about = s.face ? aboutOf(s.face, s.id, 200) : "";
   return `<details class="session"${open ? " open" : ""}>
 <summary>
-  <span class="sid">${esc(shortId(s.id))}</span>
+  <span class="sid">${esc(s.face ? headOf(s.face, s.id) : shortId(s.id))}</span>
   <span class="badge ${badgeClass}">${esc(status)}</span>
   <span class="meta">${esc(when)} · ${bits.map(esc).join(" · ")}</span>
 </summary>
+${about ? `<div class="about">${esc(about)}</div>` : ""}
 <div class="traj">${rows}</div>
 </details>`;
 }
@@ -508,9 +521,6 @@ function esc(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id;
-}
 
 function humanDuration(ms: number): string {
   const s = Math.round(ms / 1000);

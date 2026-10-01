@@ -3,6 +3,8 @@ import { resolveProjectDir } from "../paths";
 import { listPending, findPending, PendingAction, proposalWorkdir } from "../holds";
 import { approveHold, denyHold, supersededDeferIds } from "../holdActions";
 import { summarizeToolInput, truncate } from "../util";
+import { openDbReadOnly } from "../db";
+import { aboutOf, faceReader, headOf, shortId } from "../sessionFace";
 import { c } from "./format";
 
 /** `reins pending` — the review queue: every action a hold rule parked. */
@@ -17,6 +19,16 @@ export function cmdPending(): number {
   // entry still files the decision, but nothing will come back for it in that
   // session — so say so plainly instead of letting the human believe otherwise.
   const superseded = supersededDeferIds(pending);
+
+  // Which session asked, in words. Best-effort: the queue itself is plain
+  // files and lists without the DB, with mnemonics.
+  let db: ReturnType<typeof openDbReadOnly> = null;
+  try {
+    db = openDbReadOnly();
+  } catch {
+    /* capture unavailable */
+  }
+  const faceOf = faceReader(db);
 
   console.log(c.bold("Pending actions") + c.dim(" — parked by hold rules, awaiting your decision"));
   console.log("");
@@ -36,6 +48,9 @@ export function cmdPending(): number {
     // whenever it isn't simply the project root.
     const where = workdirLabel(p.cwd);
     if (where) console.log(`            ${c.dim("in " + where)}`);
+    const face = faceOf(p.session_id);
+    const about = aboutOf(face, p.session_id);
+    console.log(`            ${c.dim("from " + headOf(face, p.session_id) + (about ? " · " + about : ""))}`);
   }
   console.log("");
   console.log(
@@ -138,10 +153,6 @@ function resolveId(idArg: string | undefined, verb: string): PendingAction | nul
     return null;
   }
   return matches[0];
-}
-
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id;
 }
 
 function age(tsIso: string): string {

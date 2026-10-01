@@ -4,6 +4,7 @@ import { c } from "./format";
 import { truncate, summarizeToolInput } from "../util";
 import { loadConfig } from "../config";
 import { pendingForSession } from "../holds";
+import { faceReader, type SessionFace } from "../sessionFace";
 
 interface SessionRow {
   id: string;
@@ -56,7 +57,7 @@ export function cmdLastrun(args: string[]): number {
 
   const threshold = loadConfig().loopThreshold;
 
-  printHeader(session, calls.length);
+  printHeader(session, calls.length, faceReader(db)(session.id));
   console.log("");
   printTrajectory(calls, threshold);
   console.log("");
@@ -117,10 +118,12 @@ function printAwaiting(sessionId: string): void {
   }
 }
 
-function printHeader(s: SessionRow, callCount: number): void {
+function printHeader(s: SessionRow, callCount: number, face: SessionFace): void {
   const dur = duration(s.started, s.ended);
-  console.log(c.bold("reins · last run"));
-  console.log(`  ${c.dim("session")}  ${s.id}`);
+  console.log(c.bold("reins · last run") + (face.label === face.name ? "" : "  " + c.cyan(face.label)));
+  console.log(`  ${c.dim("session")}  ${face.name} ${c.dim("·")} ${s.id}`);
+  if (face.branch) console.log(`  ${c.dim("branch")}   ${face.branch}`);
+  if (face.asked) console.log(`  ${c.dim("asked")}    ${truncate(face.asked, 160)}`);
   if (s.repo) console.log(`  ${c.dim("repo")}     ${s.repo}`);
   console.log(`  ${c.dim("when")}     ${s.started ?? "?"}${dur ? c.dim(`  (${dur})`) : ""}`);
   const outcome = s.final_outcome ?? (s.ended ? "ended" : c.yellow("still running / not stopped"));

@@ -7,6 +7,7 @@ const format_1 = require("./format");
 const util_1 = require("../util");
 const config_1 = require("../config");
 const holds_1 = require("../holds");
+const sessionFace_1 = require("../sessionFace");
 function cmdLastrun(args) {
     const db = (0, db_1.openDbReadOnly)();
     if (!db) {
@@ -37,7 +38,7 @@ function cmdLastrun(args) {
         .prepare(`SELECT seq, tool, input_summary, input_hash, ok, ts FROM tool_calls WHERE session_id = ? ORDER BY seq ASC`)
         .all(session.id);
     const threshold = (0, config_1.loadConfig)().loopThreshold;
-    printHeader(session, calls.length);
+    printHeader(session, calls.length, (0, sessionFace_1.faceReader)(db)(session.id));
     console.log("");
     printTrajectory(calls, threshold);
     console.log("");
@@ -99,10 +100,14 @@ function printAwaiting(sessionId) {
         console.log(`    ${format_1.c.cyan(p.id)}  ${p.tool}  ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}`);
     }
 }
-function printHeader(s, callCount) {
+function printHeader(s, callCount, face) {
     const dur = duration(s.started, s.ended);
-    console.log(format_1.c.bold("reins · last run"));
-    console.log(`  ${format_1.c.dim("session")}  ${s.id}`);
+    console.log(format_1.c.bold("reins · last run") + (face.label === face.name ? "" : "  " + format_1.c.cyan(face.label)));
+    console.log(`  ${format_1.c.dim("session")}  ${face.name} ${format_1.c.dim("·")} ${s.id}`);
+    if (face.branch)
+        console.log(`  ${format_1.c.dim("branch")}   ${face.branch}`);
+    if (face.asked)
+        console.log(`  ${format_1.c.dim("asked")}    ${(0, util_1.truncate)(face.asked, 160)}`);
     if (s.repo)
         console.log(`  ${format_1.c.dim("repo")}     ${s.repo}`);
     console.log(`  ${format_1.c.dim("when")}     ${s.started ?? "?"}${dur ? format_1.c.dim(`  (${dur})`) : ""}`);

@@ -120,7 +120,7 @@ Two quick `reins steer`s before the next tool call **both** reach the agent (the
 To aim without the picker, target a session by id prefix, its auto mnemonic, or a name you gave it:
 
 ```bash
-reins sessions                                   # every session has a name: rosy-egret  a2cbbe90
+reins sessions                                   # every session has a name under its title: rosy-egret a2cbbe90
 reins name a2cbbe90 "payments-agent"             # ...or give it your own
 reins steer "stay on the payments module" --session payments-agent
 ```
@@ -354,7 +354,7 @@ Summary
     ⟳ Bash ×3: npm test
 ```
 
-- `reins sessions` — list recent sessions in the project (name, status, call count, time). Handy when several agents have run in one repo. Every session gets a deterministic mnemonic (`rosy-egret`) derived from its id; `reins name <session> "<label>"` replaces it with something meaningful to you (`--clear` reverts). Names work anywhere a session id does: `steer --session`, `lastrun`, the steer picker.
+- `reins sessions` — list recent sessions in the project (what each is about, status, call count, time), with the name and short id you address it by, its branch and its last prompt on the line below. Handy when several agents have run in one repo. Every session gets a deterministic mnemonic (`rosy-egret`) derived from its id; `reins name <session> "<label>"` replaces it with something meaningful to you (`--clear` reverts). Names work anywhere a session id does: `steer --session`, `lastrun`, the steer picker.
 - `reins lastrun <session>` — inspect a specific older run (id prefix or name).
 - `reins loops` — just the sessions where the agent got stuck.
 
@@ -370,7 +370,7 @@ Summary
 - **AGENTS**, below: each session leads with what it is about, then its live status (`active` / `looping` / `idle` / `done`) and a sparkline of its calls over the last 12 minutes. The second line has the name and short id you address it by, its git branch, and the last prompt you sent it. The third has its last call, queued steer, or held action. Status comes from recent tool activity, not the per-turn Stop hook, so an agent mid-conversation reads `active`. `looping` means the same call several times in a row, as the loop alarm counts it.
 - **Detail**, right: for a hold, the rule, reason, session, the prompt that session was last given, directory, transport, and the **full proposed input**. For an agent, its branch, last prompt, activity and trajectory, newest first. `⏎` zooms it to full screen.
 
-**Where a session's title comes from.** A name set with `reins name` leads. Otherwise the cockpit shows the title Claude Code gave the session (the one in its own session list, or the one you set with `/rename`), read from the tail of the session transcript along with the branch and last prompt. Without a transcript the `brave-otter` mnemonic leads, as before. The caveats: the transcript format is not a documented interface, so a Claude Code update can turn titles back into mnemonics until reins catches up. The path is recorded by capture, so titles need SQLite (Node ≥ 22.5), and a session shows its title after its first completed tool call under this version. Claude Code titles a session early, so a long session's title can describe where it started. The last prompt is the current one. The title, branch and prompt are display only. `reins steer` still takes the id, the mnemonic or your custom name, and no guard or hold reads them.
+**Where a session's title comes from.** The cockpit, `reins sessions`, `reins pending`, `reins lastrun`, the steer picker and the report all name a session the same way. A name set with `reins name` leads. Otherwise they show the title Claude Code gave the session (the one in its own session list, or the one you set with `/rename`), read from the tail of the session transcript along with the branch and last prompt. Without a transcript the `brave-otter` mnemonic leads, as before. The caveats: the transcript format is not a documented interface, so a Claude Code update can turn titles back into mnemonics until reins catches up. The path is recorded by capture, so titles need SQLite (Node ≥ 22.5), and a session shows its title after its first completed tool call under this version. Claude Code titles a session early, so a long session's title can describe where it started. The last prompt is the current one. The title, branch and prompt are display only. `reins steer` still takes the id, the mnemonic or your custom name, and no guard or hold reads them.
 
 | key | does |
 |---|---|
