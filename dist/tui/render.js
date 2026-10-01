@@ -41,6 +41,7 @@ exports.sameRow = sameRow;
 exports.findHold = findHold;
 exports.steerTarget = steerTarget;
 exports.renderScreen = renderScreen;
+exports.inProject = inProject;
 exports.detailContent = detailContent;
 exports.holdDetail = holdDetail;
 exports.modalSize = modalSize;
@@ -106,7 +107,8 @@ function renderScreen(m, ui, st) {
         body = detailBox(m, ui, st, row, W, B, true);
     }
     else if (W >= WIDE) {
-        const L = Math.max(48, Math.min(72, Math.floor(W * 0.44)));
+        // Half the screen, up to 76 columns: a session title, its status and its verdict share one row.
+        const L = Math.max(48, Math.min(76, Math.floor(W * 0.5)));
         body = (0, term_1.hjoin)(leftColumn(m, ui, st, row, L, B), detailBox(m, ui, st, row, W - L, B, false));
     }
     else {
@@ -132,19 +134,30 @@ function header(m, ui, st, W) {
             ? st.inverse(st.fg("bad", st.bold(` ◆ ${needs} NEEDS YOU `)))
             : st.pill(m.holds.length ? "warn" : "bad", `◆ ${needs} needs you`)
         : st.fg("good", "✓ all clear");
-    const parts = [
-        st.fg("accent", st.bold("◆ reins")) + st.dim(" watch ") + st.fg("text", st.bold((0, term_1.clean)(repo))),
-        needsPill,
-        counts.active ? st.fg("good", `● ${counts.active} active`) : "",
-        counts.looping ? st.fg("bad", `⟳ ${counts.looping} looping`) : "",
-        counts.idle ? st.dim(`○ ${counts.idle} idle`) : "",
-    ].filter(Boolean);
-    const left = " " + parts.join(st.fg("faint", "  │  "));
-    const right = (m.captured ? "" : st.fg("warn", "capture off") + st.dim(" · ")) +
-        st.dim(`every ${ui.intervalSec}s · `) +
-        st.fg("text", clock(m.nowMs)) +
-        " ";
-    return lr(left, right, W);
+    // In the order they are given up when the line is too narrow: the refresh
+    // interval goes first, then the idle count, then the active count. What
+    // needs you and what is looping stay.
+    const sep = st.fg("faint", "  │  ");
+    const title = st.fg("accent", st.bold("◆ reins")) + st.dim(" watch ") + st.fg("text", st.bold(clip((0, term_1.clean)(repo), 24)));
+    const looping = counts.looping ? st.fg("bad", `⟳ ${counts.looping} looping`) : "";
+    const active = counts.active ? st.fg("good", `● ${counts.active} active`) : "";
+    const idle = counts.idle ? st.dim(`○ ${counts.idle} idle`) : "";
+    const off = m.captured ? "" : st.fg("warn", "capture off") + st.dim(" · ");
+    const time = st.fg("text", clock(m.nowMs)) + " ";
+    const every = st.dim(`every ${ui.intervalSec}s · `);
+    const tries = [
+        [[title, needsPill, active, looping, idle], off + every + time],
+        [[title, needsPill, active, looping, idle], off + time],
+        [[title, needsPill, active, looping], off + time],
+        [[title, needsPill, looping], off + time],
+        [[title, needsPill], off + time],
+    ];
+    for (const [parts, right] of tries) {
+        const left = " " + parts.filter(Boolean).join(sep);
+        if ((0, term_1.width)(left) + 2 + (0, term_1.width)(right) <= W)
+            return lr(left, right, W);
+    }
+    return lr(" " + [title, needsPill].join(sep), time, W);
 }
 function statusLine(ui, st, W) {
     if (!ui.toast)
@@ -253,7 +266,10 @@ function selected(st, lines, on, iw, tone = "accent") {
 function holdItem(h, m, st, iw, on) {
     const p = h.action;
     const age = ago(m.nowMs - Date.parse(p.ts));
-    const l1 = lr(st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold((0, term_1.clean)(p.tool))) + "  " + st.dim((0, term_1.clean)(p.rule_id)), st.dim(`${clip((0, term_1.clean)(h.sessionLabel ?? h.sessionName), Math.floor(iw / 2) - 6)} · `) + st.fg("warn", age), iw - 1);
+    // The rule is what parked it, so the session label is cut before the rule id is.
+    const what = st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold((0, term_1.clean)(p.tool))) + "  " + st.dim((0, term_1.clean)(p.rule_id));
+    const who = clip((0, term_1.clean)(h.sessionLabel ?? h.sessionName), iw - 1 - (0, term_1.width)(what) - 1 - (0, term_1.width)(age) - 3);
+    const l1 = lr(what, st.dim(`${who} · `) + st.fg("warn", age), iw - 1);
     const first = (0, term_1.clean)(h.input).replace(/\s+/g, " ").trim();
     const l2 = "  " + st.fg("text", first);
     return selected(st, [l1, l2], on, iw, "warn");
@@ -276,13 +292,16 @@ function agentItem(a, m, st, iw, on) {
     const lv = (0, model_1.liveness)(a, m.nowMs, m.threshold);
     const L = LIVE[lv];
     const since = a.lastTsMs != null ? ago(m.nowMs - a.lastTsMs) : "—";
-    const spark = st.fg(lv === "active" || lv === "looping" ? "accent" : "faint", (0, term_1.sparkline)(a.spark.slice(-12)));
-    const l1 = lr(st.fg(L.tone, L.glyph) +
-        " " +
-        st.fg("text", st.bold((0, term_1.clean)(a.label ?? a.name))) +
-        "  " +
-        st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) +
-        claimChip(a, lv, st), spark + " " + st.dim(`${a.calls}`.padStart(4)), iw - 1);
+    const label = (0, term_1.clean)(a.label ?? a.name);
+    const state = "  " + st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) + claimChip(a, lv, st);
+    const count = st.dim(`${a.calls}`.padStart(4));
+    // The status and the verdict are what the row is for. The sparkline is
+    // dropped first (the detail pane has the full one), then the label is cut.
+    const SPARK = 12;
+    const room = iw - 1 - 2 - (0, term_1.width)(state) - 1 - (0, term_1.width)(count);
+    const withSpark = (0, term_1.width)(label) + SPARK + 1 <= room;
+    const spark = withSpark ? st.fg(lv === "active" || lv === "looping" ? "accent" : "faint", (0, term_1.sparkline)(a.spark.slice(-SPARK))) + " " : "";
+    const l1 = lr(st.fg(L.tone, L.glyph) + " " + st.fg("text", st.bold(clip(label, room))) + state, spark + count, iw - 1);
     // Who it is and what it was asked: the mnemonic and short id are how you
     // address it, the branch and prompt are how you recognise it.
     const l2 = "  " +
@@ -296,7 +315,7 @@ function agentItem(a, m, st, iw, on) {
         l3 = "  " + st.fg("violet", "✎ steer queued: ") + st.dim((0, term_1.clean)(a.steerQueued).replace(/\s+/g, " "));
     else {
         const last = a.trajectory[a.trajectory.length - 1];
-        l3 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
+        l3 = last ? "  " + callInline(last, st, m.threshold, m.repo) : "  " + st.dim("(no calls yet)");
     }
     return selected(st, [l1, l2, l3], on, iw);
 }
@@ -325,7 +344,8 @@ function sessionLine(label, name, id) {
 }
 function clip(s, cols) {
     const max = Math.max(8, cols);
-    return (0, term_1.width)(s) <= max ? s : (0, term_1.fit)(s, max - 1).trimEnd() + "…";
+    // fit() marks a cut with its own ellipsis.
+    return (0, term_1.width)(s) <= max ? s : (0, term_1.fit)(s, max).trimEnd();
 }
 const KIND = {
     ok: { glyph: "›", tone: "muted" },
@@ -336,10 +356,19 @@ const KIND = {
     approved: { glyph: "✓", tone: "good" },
     refused: { glyph: "✗", tone: "bad" },
 };
-function callInline(c, st, threshold) {
+/** A path inside the project, shown from the project root. Anything else is unchanged. */
+function inProject(summary, root) {
+    for (const sep of ["/", "\\"]) {
+        const prefix = root.endsWith(sep) ? root : root + sep;
+        if (root && summary.startsWith(prefix) && summary.length > prefix.length)
+            return summary.slice(prefix.length);
+    }
+    return summary;
+}
+function callInline(c, st, threshold, root = "") {
     const K = KIND[c.kind];
     const repeat = c.streak > 1 ? " " + st.fg(c.streak >= threshold ? "bad" : "muted", `×${c.streak}`) : "";
-    const text = (0, term_1.clean)(c.summary).replace(/\s+/g, " ");
+    const text = (0, term_1.clean)(c.tool === "Bash" ? c.summary : inProject(c.summary, root)).replace(/\s+/g, " ");
     return (st.fg(K.tone, K.glyph) +
         " " +
         st.dim((0, term_1.clean)(c.tool).padEnd(6)) +
@@ -473,13 +502,13 @@ function agentDetail(a, m, st, iw) {
     const mins = Math.round((model_1.SPARK_BUCKETS * model_1.SPARK_BUCKET_MS) / 60000);
     const bars = a.spark;
     const peak = Math.max(0, ...bars);
-    out.push("", rule(st, `activity · last ${mins}m`, iw), st.fg(lv === "active" || lv === "looping" ? "accent" : "muted", stretch((0, term_1.sparkline)(bars), Math.min(iw, model_1.SPARK_BUCKETS * 2))) +
+    out.push("", rule(st, `activity · last ${mins}m`, iw), st.fg(lv === "active" || lv === "looping" ? "accent" : "muted", stretch((0, term_1.sparkline)(bars), Math.min(iw - 16, model_1.SPARK_BUCKETS * 2))) +
         st.dim(peak ? `  peak ${peak}/${model_1.SPARK_BUCKET_MS / 1000}s` : "  quiet"), "", rule(st, "trajectory · newest first", iw));
     if (!a.trajectory.length)
         out.push(st.dim("(no calls yet)"));
     for (const c of a.trajectory.slice().reverse()) {
         const t = c.tsMs != null ? st.fg("faint", clock(c.tsMs)) + " " : "";
-        out.push(t + callInline(c, st, m.threshold) + (c.ruleId ? " " + st.dim(`[${(0, term_1.clean)(c.ruleId)}]`) : ""));
+        out.push(t + callInline(c, st, m.threshold, m.repo) + (c.ruleId ? " " + st.dim(`[${(0, term_1.clean)(c.ruleId)}]`) : ""));
     }
     return out;
 }
@@ -528,9 +557,10 @@ function modalBox(m, ui, st) {
         const scroll = Math.min(md.scroll, Math.max(0, lines.length - view));
         const seen = scroll + view >= lines.length;
         const boxH = view + 6;
+        const ask = "Approve this exact call, once?";
+        const tail = "  Any change to it is a new proposal and parks again.";
         const body = [
-            st.fg("warn", st.bold("Approve this exact call, once?")) +
-                st.dim("  Any change to it is a new proposal and parks again."),
+            st.fg("warn", st.bold(ask)) + ((0, term_1.width)(ask) + (0, term_1.width)(tail) <= iw ? st.dim(tail) : ""),
             "",
             ...lines.slice(scroll, scroll + view),
         ];
@@ -569,7 +599,7 @@ function modalBox(m, ui, st) {
         return (0, term_1.box)(st, w, Math.min(h, body.length + 3), [...body, ""], { title: "STEER", focused: true, tone: "violet" });
     }
     if (md.kind === "help") {
-        const k = (key, what) => st.fg("accent", st.bold(key.padEnd(12))) + st.fg("text", what);
+        const k = (key, what) => st.fg("accent", st.bold(key.padEnd(15))) + st.fg("text", what);
         const body = [
             k("↑ ↓  j k", "move through needs-you items and agents"),
             k("tab", "jump to the next section"),
@@ -635,7 +665,7 @@ function renderSnapshot(m, st, W) {
             if (a.steerQueued)
                 out.push(`      ✎ steer queued: ${(0, term_1.fit)((0, term_1.clean)(a.steerQueued), Math.max(20, W - 24)).trimEnd()}`);
             if (last)
-                out.push("      " + (0, term_1.fit)(`${last.tool}  ${(0, term_1.clean)(last.summary).replace(/\s+/g, " ")}`, Math.max(20, W - 8)).trimEnd());
+                out.push("      " + (0, term_1.fit)(`${last.tool}  ${(0, term_1.clean)(last.tool === "Bash" ? last.summary : inProject(last.summary, m.repo)).replace(/\s+/g, " ")}`, Math.max(20, W - 8)).trimEnd());
         }
     }
     if (m.broadcast)
@@ -643,12 +673,12 @@ function renderSnapshot(m, st, W) {
     return out.join("\n");
 }
 /* --------------------------------------------------------------- helpers */
-/** Left and right text on one line of `w` columns; the left side yields. */
+/** Left and right text on one line of `w` columns; the left side yields, and a column always separates them. */
 function lr(left, right, w) {
     const rw = (0, term_1.width)(right);
-    if (rw >= w)
+    if (rw + 1 >= w)
         return (0, term_1.fit)(right, w);
-    return (0, term_1.fit)(left, w - rw) + right;
+    return (0, term_1.fit)(left, w - rw - 1) + " " + right;
 }
 function ago(ms) {
     if (!Number.isFinite(ms))

@@ -75,6 +75,17 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Fixed
 
+- **The cockpit at narrow widths.** Found by running it in a real terminal at
+  80×24 and 150×40. The header ran its counts into the clock; it now gives up
+  the refresh interval, the idle count and the active count, in that order,
+  and keeps what needs you and the looping count. A long session title pushed
+  the status and the claim check verdict off the agent row; the row now drops
+  its sparkline and cuts the title first. A looping session could be hidden
+  under "+2 more"; it is now listed first. File paths inside the project are
+  shown from the project root. A hold row cuts the session title before the
+  rule id and always keeps a column between them. The help dialog's key
+  column no longer runs into its text, and the activity line stays inside the
+  detail pane. The left column is half the screen, up to 76 columns.
 - **Failed tool calls were never captured.** Claude Code sends a call that
   failed to `PostToolUseFailure`, which reins did not register. No failed
   command reached the trajectory, a command failing on repeat never tripped

@@ -61,7 +61,13 @@ exports.SPARK_BUCKET_MS = 30_000;
 const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)\])?(?: \[hold:[^\]]+\])?$/;
 function buildWatchModel(db, repo, threshold, o = {}) {
     const nowMs = o.nowMs ?? Date.now();
-    const agents = db ? readAgents(db, (0, holds_1.proposalWorkdir)(repo), threshold, nowMs, o) : [];
+    const recent = db ? readAgents(db, (0, holds_1.proposalWorkdir)(repo), threshold, nowMs, o) : [];
+    // A looping agent is listed first: on a short terminal the list is cut, and
+    // the header's "1 looping" must have a row to point at. The rest stay newest
+    // first. The cockpit keeps its cursor by id, so a row that moves takes the
+    // selection with it.
+    const isLooping = (a) => liveness(a, nowMs, threshold) === "looping";
+    const agents = [...recent.filter(isLooping), ...recent.filter((a) => !isLooping(a))];
     const known = new Map(agents.map((a) => [a.id, a]));
     const lookup = (0, sessionFace_1.faceReader)(db);
     const faceOf = (id) => known.get(id) ?? lookup(id);

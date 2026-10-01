@@ -30,6 +30,24 @@ const holds = [{
     reason: "Publishing to npm waits for a human.", ts: new Date(t(64)).toISOString(), cwd: "/work/app" },
   sessionName: "release-bot", input: "npm publish --access public", where: "", superseded: false }];
 const events = [{ kind: "bypass", sessionId: "b81d44e0-cccc", ts: new Date(t(1500)).toISOString(), tool: "Bash", summary: "rm -r test-results", ruleId: "rm-rf", detail: "Denied 11s earlier; a 91%-identical call executed." }];
+// What each session is about, its claim check verdict and its footprint.
+const { footprint } = require(D + "/footprint.js");
+const claim = (verdict, text, command) => ({ verdict, text, command, edited: 2, editedSince: 0, shellWritesSince: 0 });
+const about = {
+  "auth-refactor": { label: "Move token refresh into the session module", branch: "refactor/auth-session", asked: "pull the refresh logic out of the middleware and keep the tests green",
+    claim: claim("stale", "1 file edited after the last test run", "npm test -- auth") },
+  "release-bot": { label: "Publish the 0.5 release", branch: "release/0.5.0", asked: "cut the release", claim: claim("verified", "the build passed; no test run", "npm run build") },
+  "flaky-e2e": { label: "Fix the flaky checkout test", branch: "fix/checkout-e2e", asked: "checkout.spec.ts fails one run in five, find out why",
+    claim: claim("failed", "the last test run failed", "npx playwright test checkout.spec.ts") },
+  "docs-sweep": { label: "docs-sweep", branch: null, asked: null, claim: claim("none", "", null) },
+};
+for (const a of agents) {
+  Object.assign(a, about[a.name]);
+  a.footprint = footprint(a.trajectory.map((c) => ({ tool: c.tool, summary: c.summary, ok: c.kind === "failed" ? 0 : 1 })), "/work/app");
+}
+agents.unshift(...agents.splice(agents.findIndex((a) => a.name === "flaky-e2e"), 1)); // looping sessions are listed first
+holds[0].sessionLabel = about["release-bot"].label;
+holds[0].asked = about["release-bot"].asked;
 const model = { repo: "/work/app", nowMs: NOW, threshold: 3, captured: true, holds, events, olderEvents: 0, agents, broadcast: null };
 const [,, cursor, w, h, modal] = process.argv;
 const ui = { width: +w || 132, height: +h || 30, cursor: +cursor || 0, zoom: false, detailScroll: 0, modal: modal ? JSON.parse(modal) : null, toast: null, flashUntil: 0, intervalSec: 2 };

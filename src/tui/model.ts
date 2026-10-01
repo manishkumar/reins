@@ -97,7 +97,13 @@ const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)
 
 export function buildWatchModel(db: SqlDb | null, repo: string, threshold: number, o: BuildOpts = {}): WatchModel {
   const nowMs = o.nowMs ?? Date.now();
-  const agents = db ? readAgents(db, proposalWorkdir(repo), threshold, nowMs, o) : [];
+  const recent = db ? readAgents(db, proposalWorkdir(repo), threshold, nowMs, o) : [];
+  // A looping agent is listed first: on a short terminal the list is cut, and
+  // the header's "1 looping" must have a row to point at. The rest stay newest
+  // first. The cockpit keeps its cursor by id, so a row that moves takes the
+  // selection with it.
+  const isLooping = (a: AgentView) => liveness(a, nowMs, threshold) === "looping";
+  const agents = [...recent.filter(isLooping), ...recent.filter((a) => !isLooping(a))];
   const known = new Map<string, SessionFace>(agents.map((a) => [a.id, a]));
   const lookup = faceReader(db);
   const faceOf = (id: string): SessionFace => known.get(id) ?? lookup(id);

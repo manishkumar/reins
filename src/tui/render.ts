@@ -106,7 +106,8 @@ export function renderScreen(m: WatchModel, ui: UiState, st: Style): string[] {
   if (ui.zoom) {
     body = detailBox(m, ui, st, row, W, B, true);
   } else if (W >= WIDE) {
-    const L = Math.max(48, Math.min(72, Math.floor(W * 0.44)));
+    // Half the screen, up to 76 columns: a session title, its status and its verdict share one row.
+    const L = Math.max(48, Math.min(76, Math.floor(W * 0.5)));
     body = hjoin(leftColumn(m, ui, st, row, L, B), detailBox(m, ui, st, row, W - L, B, false));
   } else {
     body = leftColumn(m, ui, st, row, W, B);
@@ -134,20 +135,29 @@ function header(m: WatchModel, ui: UiState, st: Style, W: number): string {
       : st.pill(m.holds.length ? "warn" : "bad", `◆ ${needs} needs you`)
     : st.fg("good", "✓ all clear");
 
-  const parts = [
-    st.fg("accent", st.bold("◆ reins")) + st.dim(" watch ") + st.fg("text", st.bold(clean(repo))),
-    needsPill,
-    counts.active ? st.fg("good", `● ${counts.active} active`) : "",
-    counts.looping ? st.fg("bad", `⟳ ${counts.looping} looping`) : "",
-    counts.idle ? st.dim(`○ ${counts.idle} idle`) : "",
-  ].filter(Boolean);
-  const left = " " + parts.join(st.fg("faint", "  │  "));
-  const right =
-    (m.captured ? "" : st.fg("warn", "capture off") + st.dim(" · ")) +
-    st.dim(`every ${ui.intervalSec}s · `) +
-    st.fg("text", clock(m.nowMs)) +
-    " ";
-  return lr(left, right, W);
+  // In the order they are given up when the line is too narrow: the refresh
+  // interval goes first, then the idle count, then the active count. What
+  // needs you and what is looping stay.
+  const sep = st.fg("faint", "  │  ");
+  const title = st.fg("accent", st.bold("◆ reins")) + st.dim(" watch ") + st.fg("text", st.bold(clip(clean(repo), 24)));
+  const looping = counts.looping ? st.fg("bad", `⟳ ${counts.looping} looping`) : "";
+  const active = counts.active ? st.fg("good", `● ${counts.active} active`) : "";
+  const idle = counts.idle ? st.dim(`○ ${counts.idle} idle`) : "";
+  const off = m.captured ? "" : st.fg("warn", "capture off") + st.dim(" · ");
+  const time = st.fg("text", clock(m.nowMs)) + " ";
+  const every = st.dim(`every ${ui.intervalSec}s · `);
+  const tries: Array<[string[], string]> = [
+    [[title, needsPill, active, looping, idle], off + every + time],
+    [[title, needsPill, active, looping, idle], off + time],
+    [[title, needsPill, active, looping], off + time],
+    [[title, needsPill, looping], off + time],
+    [[title, needsPill], off + time],
+  ];
+  for (const [parts, right] of tries) {
+    const left = " " + parts.filter(Boolean).join(sep);
+    if (width(left) + 2 + width(right) <= W) return lr(left, right, W);
+  }
+  return lr(" " + [title, needsPill].join(sep), time, W);
 }
 
 function statusLine(ui: UiState, st: Style, W: number): string {
@@ -259,11 +269,10 @@ function selected(st: Style, lines: string[], on: boolean, iw: number, tone: Ton
 function holdItem(h: HoldView, m: WatchModel, st: Style, iw: number, on: boolean): string[] {
   const p = h.action;
   const age = ago(m.nowMs - Date.parse(p.ts));
-  const l1 = lr(
-    st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold(clean(p.tool))) + "  " + st.dim(clean(p.rule_id)),
-    st.dim(`${clip(clean(h.sessionLabel ?? h.sessionName), Math.floor(iw / 2) - 6)} · `) + st.fg("warn", age),
-    iw - 1,
-  );
+  // The rule is what parked it, so the session label is cut before the rule id is.
+  const what = st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold(clean(p.tool))) + "  " + st.dim(clean(p.rule_id));
+  const who = clip(clean(h.sessionLabel ?? h.sessionName), iw - 1 - width(what) - 1 - width(age) - 3);
+  const l1 = lr(what, st.dim(`${who} · `) + st.fg("warn", age), iw - 1);
   const first = clean(h.input).replace(/\s+/g, " ").trim();
   const l2 = "  " + st.fg("text", first);
   return selected(st, [l1, l2], on, iw, "warn");
@@ -293,17 +302,16 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
   const lv = liveness(a, m.nowMs, m.threshold);
   const L = LIVE[lv];
   const since = a.lastTsMs != null ? ago(m.nowMs - a.lastTsMs) : "—";
-  const spark = st.fg(lv === "active" || lv === "looping" ? "accent" : "faint", sparkline(a.spark.slice(-12)));
-  const l1 = lr(
-    st.fg(L.tone, L.glyph) +
-      " " +
-      st.fg("text", st.bold(clean(a.label ?? a.name))) +
-      "  " +
-      st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) +
-      claimChip(a, lv, st),
-    spark + " " + st.dim(`${a.calls}`.padStart(4)),
-    iw - 1,
-  );
+  const label = clean(a.label ?? a.name);
+  const state = "  " + st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) + claimChip(a, lv, st);
+  const count = st.dim(`${a.calls}`.padStart(4));
+  // The status and the verdict are what the row is for. The sparkline is
+  // dropped first (the detail pane has the full one), then the label is cut.
+  const SPARK = 12;
+  const room = iw - 1 - 2 - width(state) - 1 - width(count);
+  const withSpark = width(label) + SPARK + 1 <= room;
+  const spark = withSpark ? st.fg(lv === "active" || lv === "looping" ? "accent" : "faint", sparkline(a.spark.slice(-SPARK))) + " " : "";
+  const l1 = lr(st.fg(L.tone, L.glyph) + " " + st.fg("text", st.bold(clip(label, room))) + state, spark + count, iw - 1);
   // Who it is and what it was asked: the mnemonic and short id are how you
   // address it, the branch and prompt are how you recognise it.
   const l2 =
@@ -316,7 +324,7 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
   else if (a.steerQueued) l3 = "  " + st.fg("violet", "✎ steer queued: ") + st.dim(clean(a.steerQueued).replace(/\s+/g, " "));
   else {
     const last = a.trajectory[a.trajectory.length - 1];
-    l3 = last ? "  " + callInline(last, st, m.threshold) : "  " + st.dim("(no calls yet)");
+    l3 = last ? "  " + callInline(last, st, m.threshold, m.repo) : "  " + st.dim("(no calls yet)");
   }
   return selected(st, [l1, l2, l3], on, iw);
 }
@@ -348,7 +356,8 @@ function sessionLine(label: string | undefined, name: string, id: string): strin
 
 function clip(s: string, cols: number): string {
   const max = Math.max(8, cols);
-  return width(s) <= max ? s : fit(s, max - 1).trimEnd() + "…";
+  // fit() marks a cut with its own ellipsis.
+  return width(s) <= max ? s : fit(s, max).trimEnd();
 }
 
 const KIND: Record<CallKind, { glyph: string; tone: Tone }> = {
@@ -361,10 +370,19 @@ const KIND: Record<CallKind, { glyph: string; tone: Tone }> = {
   refused: { glyph: "✗", tone: "bad" },
 };
 
-function callInline(c: CallView, st: Style, threshold: number): string {
+/** A path inside the project, shown from the project root. Anything else is unchanged. */
+export function inProject(summary: string, root: string): string {
+  for (const sep of ["/", "\\"]) {
+    const prefix = root.endsWith(sep) ? root : root + sep;
+    if (root && summary.startsWith(prefix) && summary.length > prefix.length) return summary.slice(prefix.length);
+  }
+  return summary;
+}
+
+function callInline(c: CallView, st: Style, threshold: number, root = ""): string {
   const K = KIND[c.kind];
   const repeat = c.streak > 1 ? " " + st.fg(c.streak >= threshold ? "bad" : "muted", `×${c.streak}`) : "";
-  const text = clean(c.summary).replace(/\s+/g, " ");
+  const text = clean(c.tool === "Bash" ? c.summary : inProject(c.summary, root)).replace(/\s+/g, " ");
   return (
     st.fg(K.tone, K.glyph) +
     " " +
@@ -536,7 +554,7 @@ function agentDetail(a: AgentView, m: WatchModel, st: Style, iw: number): string
   out.push(
     "",
     rule(st, `activity · last ${mins}m`, iw),
-    st.fg(lv === "active" || lv === "looping" ? "accent" : "muted", stretch(sparkline(bars), Math.min(iw, SPARK_BUCKETS * 2))) +
+    st.fg(lv === "active" || lv === "looping" ? "accent" : "muted", stretch(sparkline(bars), Math.min(iw - 16, SPARK_BUCKETS * 2))) +
       st.dim(peak ? `  peak ${peak}/${SPARK_BUCKET_MS / 1000}s` : "  quiet"),
     "",
     rule(st, "trajectory · newest first", iw),
@@ -544,7 +562,7 @@ function agentDetail(a: AgentView, m: WatchModel, st: Style, iw: number): string
   if (!a.trajectory.length) out.push(st.dim("(no calls yet)"));
   for (const c of a.trajectory.slice().reverse()) {
     const t = c.tsMs != null ? st.fg("faint", clock(c.tsMs)) + " " : "";
-    out.push(t + callInline(c, st, m.threshold) + (c.ruleId ? " " + st.dim(`[${clean(c.ruleId)}]`) : ""));
+    out.push(t + callInline(c, st, m.threshold, m.repo) + (c.ruleId ? " " + st.dim(`[${clean(c.ruleId)}]`) : ""));
   }
   return out;
 }
@@ -598,9 +616,10 @@ function modalBox(m: WatchModel, ui: UiState, st: Style): string[] {
     const scroll = Math.min(md.scroll, Math.max(0, lines.length - view));
     const seen = scroll + view >= lines.length;
     const boxH = view + 6;
+    const ask = "Approve this exact call, once?";
+    const tail = "  Any change to it is a new proposal and parks again.";
     const body = [
-      st.fg("warn", st.bold("Approve this exact call, once?")) +
-        st.dim("  Any change to it is a new proposal and parks again."),
+      st.fg("warn", st.bold(ask)) + (width(ask) + width(tail) <= iw ? st.dim(tail) : ""),
       "",
       ...lines.slice(scroll, scroll + view),
     ];
@@ -643,7 +662,7 @@ function modalBox(m: WatchModel, ui: UiState, st: Style): string[] {
   }
 
   if (md.kind === "help") {
-    const k = (key: string, what: string) => st.fg("accent", st.bold(key.padEnd(12))) + st.fg("text", what);
+    const k = (key: string, what: string) => st.fg("accent", st.bold(key.padEnd(15))) + st.fg("text", what);
     const body = [
       k("↑ ↓  j k", "move through needs-you items and agents"),
       k("tab", "jump to the next section"),
@@ -714,7 +733,7 @@ export function renderSnapshot(m: WatchModel, st: Style, W: number): string {
       if (about.length) out.push("      " + fit(about.join(" · "), Math.max(20, W - 8)).trimEnd());
       if (a.claim && CLAIM[a.claim.verdict]) out.push(`      ${CLAIM[a.claim.verdict].glyph} ${a.claim.text}`);
       if (a.steerQueued) out.push(`      ✎ steer queued: ${fit(clean(a.steerQueued), Math.max(20, W - 24)).trimEnd()}`);
-      if (last) out.push("      " + fit(`${last.tool}  ${clean(last.summary).replace(/\s+/g, " ")}`, Math.max(20, W - 8)).trimEnd());
+      if (last) out.push("      " + fit(`${last.tool}  ${clean(last.tool === "Bash" ? last.summary : inProject(last.summary, m.repo)).replace(/\s+/g, " ")}`, Math.max(20, W - 8)).trimEnd());
     }
   }
   if (m.broadcast) out.push("", st.dim("broadcast steer queued: ") + clean(m.broadcast));
@@ -723,11 +742,11 @@ export function renderSnapshot(m: WatchModel, st: Style, W: number): string {
 
 /* --------------------------------------------------------------- helpers */
 
-/** Left and right text on one line of `w` columns; the left side yields. */
+/** Left and right text on one line of `w` columns; the left side yields, and a column always separates them. */
 function lr(left: string, right: string, w: number): string {
   const rw = width(right);
-  if (rw >= w) return fit(right, w);
-  return fit(left, w - rw) + right;
+  if (rw + 1 >= w) return fit(right, w);
+  return fit(left, w - rw - 1) + " " + right;
 }
 
 export function ago(ms: number): string {

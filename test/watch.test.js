@@ -196,7 +196,7 @@ test("renderScreen: breaches and bypasses appear under NEEDS YOU with advice", (
   const m = model({ events: [ev] });
   const out = screen(m, ui());
   assert.match(out, /WORKED AROUND/);
-  assert.match(out, /reins guard remove rm-rf/);
+  assert.match(out, /reins guard remove[\s│]+rm-rf/);
 });
 
 test("renderScreen: capture off keeps the holds and explains the agent pane", () => {
