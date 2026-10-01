@@ -453,6 +453,18 @@ Text from agent runs (commands, paths, steering, session titles and prompts) is 
 
 Nothing listens on a port: the only way in is the keyboard of whoever started it. That's why approving lives here and not in `reins report`. Tune the refresh with `reins watch -n 1` (seconds). Piped or with `--once`, it prints one plain snapshot, including the `reins approve` / `reins deny` command for each hold, so it works in scripts. No TUI library and no daemon: raw ANSI on the terminal you already have, and it needs at least 60×14.
 
+### The hold queue inside Claude Code (experimental mod)
+
+Claude Code 2.1.287 added function hooks ("mods"). `mods/reins-status/` in this repository is one: it reads `.reins/pending/` and shows `reins: 2 held` in the status line and the oldest three holds in a band above the prompt, refreshed every five seconds and at the end of each turn. It ships in the repository only, not in the npm package.
+
+```bash
+claude --plugin-dir /path/to/reins/mods/reins-status
+```
+
+**It shows the queue and never answers it.** There is no approve or deny control on it, and it hooks no tool call. The reason is measured, in [docs/mods-probe.md](docs/mods-probe.md): the mod engine skips a hook that throws or runs past its 10 seconds and lets the tool call go ahead, so a hold enforced by a mod would fail open. The reins gate stays a command hook. Approving stays in `reins approve` and `reins watch`.
+
+The caveats. The mod API is early access and can change in any Claude Code release, and this mod then stops loading until it is updated. It was tested with `claude plugin test` against the engine, with the file system and clock mocked. It has not been run in a live interactive session, so how the band looks in a terminal is unverified. It reads `.reins/pending` relative to the session's working directory, so it shows nothing when Claude Code is started from a subdirectory of the project. It uses no SQLite and makes no network call.
+
 ### `reins report` — the captured runs as a local web page
 
 `watch` is the live view; **`reins report` is the browsable archive.** It reads `.reins/runs.db` and writes a single **self-contained HTML file** (inline CSS, no JS framework, **zero network requests** — nothing leaves your machine) with:
@@ -543,6 +555,8 @@ The live reflexes never touch the database, so they work on **any Node ≥ 18**.
 - **`.reins/decided/` is approval access.** One-shot hold decisions — approvals *and* refusals — are files there; anything that can write them can pre-approve (or fake-refuse) a parked action. Same posture, same mitigations.
 
 Guards, separately, are **not** a containment boundary (see *What guards are — and are not*).
+
+**A Claude Code mod runs above reins.** From Claude Code 2.1.287, a mod's `tool.call` hook runs before any `PreToolUse` command hook, reins included (measured in [docs/mods-probe.md](docs/mods-probe.md)). A mod can rewrite a command before reins reads it, in which case reins matches, parks and approves the rewritten command, the one that would run. A mod can also answer a tool call itself, and then no `PreToolUse` hook runs and reins sees nothing. A mod is code you installed in your own Claude Code, so this is the same trust as any other local code. reins does not detect it.
 
 A crashing hook **fails open** (the agent proceeds) so a bug in `reins` can never wedge your agent — which also means guards are best-effort if the hook itself errors.
 

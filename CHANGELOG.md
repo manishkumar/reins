@@ -7,6 +7,18 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Added
 
+- **`mods/reins-status`, an experimental read-only Claude Code mod.** It shows
+  the hold queue in the status line and in a band above the prompt, read from
+  `.reins/pending/`. It has no approval control and hooks no tool call. It is
+  in the repository, not the npm package. The mod API is early access, and the
+  mod was tested against the engine with `claude plugin test`, not in a live
+  session.
+- **`docs/mods-probe.md`.** What Claude Code 2.1.287 does with a mod hook that
+  throws, times out or opens a dialog, and where mods sit against command
+  hooks, measured with `mods/probe`. A mod fails open and runs above
+  `PreToolUse`, so the reins gate stays a command hook. The threat model in
+  the README now says a mod can rewrite or answer a call before reins sees it.
+
 - **Sessions are named by what they are about.** The cockpit, `reins
   sessions`, `reins pending`, `reins lastrun`, the steer picker and the report
   lead with the title Claude Code gave the session, with its git branch and
