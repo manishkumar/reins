@@ -120,6 +120,14 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Fixed
 
+- **The claim check called a masked test run "verified".** `npm test || true`,
+  `npm test; echo done`, `npm test &` and `if npm test; then …` end with
+  another command's exit status. They are now "result not visible".
+  `npm test || exit 1` and a `;` chain under `set -e` still count.
+- **The claim check missed test runs behind a wrapper.** `timeout 120 npm
+  test`, `(cd pkg && npm test)`, `./node_modules/.bin/jest`, `env CI=1 npm
+  test` and `bash -c "npm test"` read as "no test or build run". They are now
+  recognized.
 - **Approving from the cockpit compared against the wrong snapshot.** The
   check that an action is unchanged since it was reviewed read the reviewed
   copy from the screen's model, which refreshes under an open dialog. It now

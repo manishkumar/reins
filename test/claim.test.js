@@ -44,8 +44,54 @@ test("verificationIn: a piped or cut-short run has no visible result", () => {
   assert.strictEqual(verificationIn("npm test 2>&1 | tail -5").visible, false, "the exit status is tail's");
   assert.strictEqual(verificationIn("set -o pipefail; npm test 2>&1 | tail -5").visible, true);
   assert.strictEqual(verificationIn("npm test 2>&1").visible, true, "a redirect is not a pipe");
-  assert.strictEqual(verificationIn("npm test || echo failed").visible, true);
+  assert.strictEqual(verificationIn("npm test || exit 1").visible, true, "the failure still ends the call");
+  assert.strictEqual(verificationIn("npm run build && npm test").visible, true);
+  assert.strictEqual(verificationIn("npm test;").visible, true, "nothing follows the separator");
   assert.strictEqual(verificationIn("npm test -- --grep a-very-long-pattern…").visible, false, "the summary was truncated");
+});
+
+test("verificationIn: a run whose exit status is replaced has no visible result", () => {
+  for (const masked of [
+    "npm test || true",
+    "npm test || echo failed",
+    "npm test || exit 0",
+    "npm test; echo done",
+    "npm test 2>&1; git status",
+    "npm test &",
+    "npm test & wait",
+    "if npm test; then echo ok; fi",
+  ]) {
+    const v = verificationIn(masked);
+    assert.ok(v, masked);
+    assert.strictEqual(v.visible, false, masked);
+  }
+  assert.strictEqual(verificationIn("set -e; npm test; echo done").visible, true, "set -e ends the call at the failure");
+  assert.strictEqual(verificationIn("npm test 2>&1 && echo ok").visible, true);
+  assert.strictEqual(verificationIn("npm test > out.log 2>&1").visible, true, "2>&1 is not a background job");
+
+  // A masked pass is not reported as verified.
+  assert.strictEqual(checkClaim([edit("src/a.ts"), bash("npm test || true", 1)]).verdict, "unknown");
+});
+
+test("verificationIn: a run behind a wrapper, a subshell or a path still counts", () => {
+  for (const [command, kind] of [
+    ["timeout 120 npm test", "test"],
+    ["timeout -s KILL 5m npx jest", "test"],
+    ["(cd pkg && npm test)", "test"],
+    ["./node_modules/.bin/jest --ci", "test"],
+    ["node_modules/.bin/tsc --noEmit", "build"],
+    ['bash -c "npm test"', "test"],
+    ["sh -c 'cd app && cargo test'", "test"],
+    ["env CI=1 npm test", "test"],
+    ["./gradlew test", "test"],
+  ]) {
+    const v = verificationIn(command);
+    assert.ok(v, command);
+    assert.deepStrictEqual(v.kinds, [kind], command);
+    assert.strictEqual(v.visible, true, command);
+  }
+  assert.strictEqual(verificationIn('echo "$(npm test)"'), null);
+  assert.strictEqual(verificationIn("ls ./test"), null);
 });
 
 test("checkClaim: the five verdicts", () => {

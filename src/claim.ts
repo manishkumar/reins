@@ -16,6 +16,9 @@
  * unknown, not as a pass:
  *   - `npm test | tail` exits with tail's status, so its result is unknown
  *     (unless the command sets pipefail);
+ *   - `npm test || true`, `npm test; echo done` and `npm test &` report
+ *     another command's status or none, so their result is unknown too
+ *     (`|| exit 1` keeps the failure, and so does `set -e` before a `;`);
  *   - an interrupted run, and a command too long for the captured summary to
  *     show whole, are unknown too.
  * What it cannot see at all: edits made through the shell (sed -i, a script),
@@ -92,19 +95,42 @@ const BUILD_CMDS: RegExp[] = [
  * Which kinds of check a shell command runs, and whether its exit status can
  * be trusted to be theirs. Null when it runs none.
  */
+function kindOf(words: string[]): Kind | null {
+  // `./node_modules/.bin/jest` is jest. `./gradlew` and `./mvnw` are matched as written.
+  const bare = [words[0].replace(/^.*\//, ""), ...words.slice(1)].join(" ");
+  for (const text of [words.join(" "), bare]) {
+    if (TEST_CMDS.some((re) => re.test(text))) return "test";
+    if (BUILD_CMDS.some((re) => re.test(text))) return "build";
+  }
+  return null;
+}
+
+/** After `||`, a command that still ends the call with a failure: `exit 1`, `return 1`, `false`. */
+function keepsFailure(words: string[]): boolean {
+  if (words[0] === "false") return true;
+  return (words[0] === "exit" || words[0] === "return") && words[1] !== "0";
+}
+
 export function verificationIn(command: string): { kinds: Kind[]; visible: boolean } | null {
   const kinds = new Set<Kind>();
   // A summary cut short may hide a pipe.
   let visible = !command.endsWith("…");
   const pipefail = /\bpipefail\b/.test(command);
 
-  for (const cmd of shellCommands(command)) {
-    const text = cmd.words.join(" ");
-    const kind: Kind | null = TEST_CMDS.some((re) => re.test(text)) ? "test" : BUILD_CMDS.some((re) => re.test(text)) ? "build" : null;
-    if (!kind) continue;
+  const errexit = /(^|[\s;&])set\s+-[a-z]*e/.test(command);
+
+  const cmds = shellCommands(command);
+  cmds.forEach((cmd, i) => {
+    const kind = kindOf(cmd.words);
+    if (!kind) return;
     kinds.add(kind);
     if (cmd.piped && !pipefail) visible = false;
-  }
+    // The call's exit status is this command's only if nothing after it replaces it.
+    const next = cmds[i + 1];
+    if (cmd.then === "&") visible = false;
+    if (cmd.then === ";" && !errexit) visible = false;
+    if (cmd.then === "||" && !(next && keepsFailure(next.words))) visible = false;
+  });
   return kinds.size ? { kinds: [...kinds], visible } : null;
 }
 
