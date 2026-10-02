@@ -7,11 +7,13 @@ import { loadConfig, saveConfig } from "../config";
 import { settingsBlockJson } from "../settingsBlock";
 import { mergeReinsHooks } from "../settingsMerge";
 import { getDriver, capabilityNote } from "../store";
+import { installMod } from "../modInstall";
 import { c } from "./format";
 
 export function cmdInit(args: string[]): number {
   const printOnly = args.includes("--print") || args.includes("-p");
   const useLocal = args.includes("--local");
+  const withMod = args.includes("--mod");
 
   // init always targets the CURRENT directory (it's an explicit "set up here"),
   // never a parent project found by walk-up.
@@ -65,6 +67,7 @@ export function cmdInit(args: string[]): number {
         console.log(settingsBlockJson());
         break;
     }
+    if (withMod) reportMod(here);
     console.log("");
     console.log(c.dim("Restart Claude Code in this project so it loads the hooks."));
   }
@@ -72,6 +75,34 @@ export function cmdInit(args: string[]): number {
   console.log("");
   console.log("Then, mid-run:  " + c.cyan('reins steer "focus the auth work on the token refresh path"'));
   return 0;
+}
+
+/**
+ * `--mod`: copy the read-only status mod into `.claude/skills/reins-status/`,
+ * where Claude Code loads it once the project is trusted. Opt-in, because the
+ * mod API is early access.
+ */
+function reportMod(here: string): void {
+  const r = installMod(here);
+  const where = c.cyan(rel(r.dir));
+  switch (r.status) {
+    case "installed":
+      console.log(c.green("✓ Installed the status mod in ") + where);
+      console.log(c.dim("  Shows the hold queue inside Claude Code. Read-only: answer holds with reins approve or reins watch."));
+      break;
+    case "updated":
+      console.log(c.green("✓ Updated the status mod in ") + where);
+      break;
+    case "already":
+      console.log(c.green("✓ Status mod already installed in ") + where);
+      break;
+    case "foreign":
+      console.log(c.red("! ") + where + c.dim(" exists and is not the reins mod. Left untouched."));
+      break;
+    case "no-source":
+      console.log(c.red("! ") + c.dim("This build of reins does not include the status mod."));
+      break;
+  }
 }
 
 interface MergeResult {

@@ -43,10 +43,12 @@ const config_1 = require("../config");
 const settingsBlock_1 = require("../settingsBlock");
 const settingsMerge_1 = require("../settingsMerge");
 const store_1 = require("../store");
+const modInstall_1 = require("../modInstall");
 const format_1 = require("./format");
 function cmdInit(args) {
     const printOnly = args.includes("--print") || args.includes("-p");
     const useLocal = args.includes("--local");
+    const withMod = args.includes("--mod");
     // init always targets the CURRENT directory (it's an explicit "set up here"),
     // never a parent project found by walk-up.
     const here = process.cwd();
@@ -95,12 +97,41 @@ function cmdInit(args) {
                 console.log((0, settingsBlock_1.settingsBlockJson)());
                 break;
         }
+        if (withMod)
+            reportMod(here);
         console.log("");
         console.log(format_1.c.dim("Restart Claude Code in this project so it loads the hooks."));
     }
     console.log("");
     console.log("Then, mid-run:  " + format_1.c.cyan('reins steer "focus the auth work on the token refresh path"'));
     return 0;
+}
+/**
+ * `--mod`: copy the read-only status mod into `.claude/skills/reins-status/`,
+ * where Claude Code loads it once the project is trusted. Opt-in, because the
+ * mod API is early access.
+ */
+function reportMod(here) {
+    const r = (0, modInstall_1.installMod)(here);
+    const where = format_1.c.cyan(rel(r.dir));
+    switch (r.status) {
+        case "installed":
+            console.log(format_1.c.green("✓ Installed the status mod in ") + where);
+            console.log(format_1.c.dim("  Shows the hold queue inside Claude Code. Read-only: answer holds with reins approve or reins watch."));
+            break;
+        case "updated":
+            console.log(format_1.c.green("✓ Updated the status mod in ") + where);
+            break;
+        case "already":
+            console.log(format_1.c.green("✓ Status mod already installed in ") + where);
+            break;
+        case "foreign":
+            console.log(format_1.c.red("! ") + where + format_1.c.dim(" exists and is not the reins mod. Left untouched."));
+            break;
+        case "no-source":
+            console.log(format_1.c.red("! ") + format_1.c.dim("This build of reins does not include the status mod."));
+            break;
+    }
 }
 /**
  * Idempotently add reins hook entries to a Claude Code settings file. Preserves

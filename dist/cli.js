@@ -181,6 +181,7 @@ USAGE
   reins init                       Set up .reins/ and wire hooks into settings
   reins init --print               Print the hooks block instead of writing it
   reins init --local               Wire into .claude/settings.local.json
+  reins init --mod                 Also install the read-only status mod (hold queue inside Claude Code)
   reins doctor                     Diagnose your setup when something's off
   reins uninstall [--purge]        Remove reins hooks (--purge also drops .reins)
   reins steer "<message>"          Queue live steering for the next tool call

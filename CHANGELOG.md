@@ -7,12 +7,19 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Added
 
-- **`mods/reins-status`, an experimental read-only Claude Code mod.** It shows
-  the hold queue in the status line and in a band above the prompt, read from
-  `.reins/pending/`. It has no approval control and hooks no tool call. It is
-  in the repository, not the npm package. The mod API is early access, and the
-  mod was tested against the engine with `claude plugin test`, not in a live
-  session.
+- **`mods/reins-status`, an experimental read-only Claude Code mod.** `/reins`
+  opens a pane beside the conversation with each hold's full input, and a
+  count sits in the status line and in one line above the prompt, read from
+  `.reins/pending/`. A new hold raises a toast once. It has no
+  approval control and hooks no tool call. The mod API is early access. The
+  mod was tested against the engine with `claude plugin test` and seen to load
+  in a headless run. The status line, the band and the pane were seen in a
+  live session; the toast was not.
+- **`reins init --mod` installs that mod.** It copies the mod into
+  `.claude/skills/reins-status/`, where Claude Code loads it once the
+  workspace is trusted. It is opt-in, it never writes into a folder of that
+  name that is not the reins mod, and `reins uninstall` removes exactly the
+  files it added. The mod now ships in the npm package.
 - **`docs/mods-probe.md`.** What Claude Code 2.1.287 does with a mod hook that
   throws, times out or opens a dialog, and where mods sit against command
   hooks, measured with `mods/probe`. A mod fails open and runs above
@@ -85,13 +92,6 @@ All notable changes to `reins` are documented here. Format loosely follows
   an existing file. It contains commands and paths from agent runs.
 - Durations of 48 hours or more read in days (`19d 3h`).
 
-### Fixed
-
-- **The cockpit at narrow widths.** Found by running it in a real terminal at
-  80×24 and 150×40. The header ran its counts into the clock; it now gives up
-  the refresh interval, the idle count and the active count, in that order,
-  and keeps what needs you and the looping count. A long session title pushed
-  the status and the claim check verdict off the agent row; the row now drops
 - **The cockpit shows why a hold parked.** The text a Bash rule matched is
   highlighted in the proposed input, in the detail pane and the approve
   dialog. When it sits below the third line of a long command, that line is
@@ -113,12 +113,19 @@ All notable changes to `reins` are documented here. Format loosely follows
 - **Dates in the cockpit** read `10 Sep 22:50` in every locale. A hold whose
   session has been quiet for over a day says so.
 
-  its sparkline and cuts the title first. A looping session could be hidden
-  under "+2 more"; it is now listed first. File paths inside the project are
+### Fixed
+
 - **Approving from the cockpit compared against the wrong snapshot.** The
   check that an action is unchanged since it was reviewed read the reviewed
   copy from the screen's model, which refreshes under an open dialog. It now
   keeps the action as it stood when the dialog opened.
+- **The cockpit at narrow widths.** Found by running it in a real terminal at
+  80×24 and 150×40. The header ran its counts into the clock; it now gives up
+  the refresh interval, the idle count and the active count, in that order,
+  and keeps what needs you and the looping count. A long session title pushed
+  the status and the claim check verdict off the agent row; the row now drops
+  its sparkline and cuts the title first. A looping session could be hidden
+  under "+2 more"; it is now listed first. File paths inside the project are
   shown from the project root. A hold row cuts the session title before the
   rule id and always keeps a column between them. The help dialog's key
   column no longer runs into its text, and the activity line stays inside the

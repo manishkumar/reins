@@ -29,6 +29,8 @@
   },
   "files": [
     "dist",
+    "mods/reins-status",
+    "!mods/reins-status/hooks/*.test.tsx",
     "README.md",
     "LICENSE"
   ],

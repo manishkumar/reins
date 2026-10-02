@@ -57,14 +57,17 @@ row itself moves when a session starts or stops looping. If a stable order
 matters more than seeing the loop on a short terminal, the alternative is to
 keep the order and name what is hidden in the list's footer.
 
-## 6. Should the mod ship in the npm package, and should it find the project root?
+## 6. Should `reins init` install the mod by default?
 
-`mods/reins-status` is in the repository only. It reads `.reins/pending`
-relative to the session's working directory, so it shows nothing when Claude
-Code starts in a subdirectory. reins itself resolves the project through
-`CLAUDE_PROJECT_DIR` and by walking up. Doing the same in the mod means
-`$.fs.ancestors` or `$.env`, more API surface on an interface marked early
-access. It has also never been run in a live session (docs/mods-probe.md).
+Decided so far: the mod ships in the npm package, `reins init --mod` copies it
+into `.claude/skills/reins-status/`, and it finds `.reins/` by walking up with
+`$.fs.stat`. Open: whether plain `reins init` should install it. Against: the
+mod API is early access, `.claude/skills/` is usually committed so the mod
+reaches the whole team, and the copy goes stale when reins is upgraded
+(`reins doctor` does not yet report that). The status line, the band and the `/reins` pane have been
+seen in a live interactive session; the toast has not. Also open:
+whether the pane should open on its own when a hold parks. It does not, because
+outside the fullscreen layout a pane sits above the prompt.
 
 ## 7. Should reins say when a mod is installed above it?
 
