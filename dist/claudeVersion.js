@@ -1,11 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.FAILURE_HOOK = exports.FAILURE_HOOK_SINCE = void 0;
+exports.FAILURE_HOOK = exports.FAILURE_HOOK_SINCE = exports.parseVersion = void 0;
+exports.claudeSightings = claudeSightings;
 exports.claudeCodeVersion = claudeCodeVersion;
-exports.parseVersion = parseVersion;
 exports.olderThan = olderThan;
 exports.predatesFailureHook = predatesFailureHook;
+exports.mayWriteFailureHook = mayWriteFailureHook;
 const node_child_process_1 = require("node:child_process");
+const heartbeat_1 = require("./heartbeat");
+Object.defineProperty(exports, "parseVersion", { enumerable: true, get: function () { return heartbeat_1.parseVersion; } });
 /**
  * Which Claude Code is installed, for `reins init` and `reins doctor`.
  *
@@ -22,23 +25,47 @@ const node_child_process_1 = require("node:child_process");
 /** The first Claude Code that knows the `PostToolUseFailure` event. */
 exports.FAILURE_HOOK_SINCE = "2.0.56";
 exports.FAILURE_HOOK = "PostToolUseFailure";
-/** `claude --version` as "2.1.287", or null when it cannot be run or read. */
-function claudeCodeVersion() {
-    // Tests, and a person whose `claude` is not on PATH, can say it outright.
+/**
+ * Every place the Claude Code version can be read, because any one of them can
+ * be missing: `claude` may not be on PATH (an IDE extension, a desktop app),
+ * and `reins init` may be run from a plain terminal with no session around it.
+ *   - `claude --version`;
+ *   - the environment Claude Code gives the commands it runs, when init or
+ *     doctor is run from inside a session;
+ *   - the version a reins hook last saw in this project (`sawInHook`).
+ */
+function claudeSightings(sawInHook) {
+    // Tests, and a person who knows better, can say it outright.
     const stated = process.env.REINS_CLAUDE_VERSION;
-    if (stated !== undefined)
-        return parseVersion(stated);
+    if (stated !== undefined) {
+        const v = (0, heartbeat_1.parseVersion)(stated);
+        return v ? [{ version: v, from: "REINS_CLAUDE_VERSION" }] : [];
+    }
+    const out = [];
     try {
-        const out = (0, node_child_process_1.execFileSync)("claude", ["--version"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-        return parseVersion(out);
+        const v = (0, heartbeat_1.parseVersion)((0, node_child_process_1.execFileSync)("claude", ["--version"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }));
+        if (v)
+            out.push({ version: v, from: "claude --version" });
     }
     catch {
-        return null;
+        /* not on PATH */
     }
+    const here = (0, heartbeat_1.claudeVersionFromEnv)();
+    if (here)
+        out.push({ version: here, from: "this session" });
+    if (sawInHook)
+        out.push({ version: sawInHook, from: "the last hook run here" });
+    return out;
 }
-function parseVersion(text) {
-    const m = /(\d+)\.(\d+)\.(\d+)/.exec(text);
-    return m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3])}` : null;
+/**
+ * The version to act on: the OLDEST one seen, or null when none was. Two
+ * installs can coexist (a current CLI on PATH, an old one in an editor), and
+ * the settings file is read by both. Writing for the oldest is the direction
+ * in which a guard cannot go quiet.
+ */
+function claudeCodeVersion(sawInHook) {
+    const seen = claudeSightings(sawInHook).map((s) => s.version);
+    return seen.length ? seen.reduce((a, b) => (olderThan(b, a) ? b : a)) : null;
 }
 function olderThan(version, than) {
     const a = version.split(".").map(Number);
@@ -49,12 +76,17 @@ function olderThan(version, than) {
     }
     return false;
 }
-/**
- * True only when the installed Claude Code is known to predate the failure
- * hook. An unknown version is treated as current: most installs are, and
- * leaving the hook out there would lose failed-call capture for everyone
- * whose `claude` is not on PATH. `reins init` says so when it cannot tell.
- */
+/** True when the installed Claude Code is known to predate the failure hook. */
 function predatesFailureHook(version) {
     return version !== null && olderThan(version, exports.FAILURE_HOOK_SINCE);
+}
+/**
+ * May `reins init` write the failure hook? Only on positive evidence that
+ * every Claude Code seen knows it. An unknown version gets the three hooks
+ * every version accepts: losing capture of failed calls is a smaller loss
+ * than a file that turns every guard off. `reins init --failure-hook` is the
+ * person saying they know their version.
+ */
+function mayWriteFailureHook(version) {
+    return version !== null && !olderThan(version, exports.FAILURE_HOOK_SINCE);
 }

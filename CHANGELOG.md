@@ -127,8 +127,16 @@ All notable changes to `reins` are documented here. Format loosely follows
   Found by running 2.0.0, 2.0.55 and 2.0.56 against the same file. `reins
   init` now reads `claude --version`, leaves the hook out on an older version
   and removes its own entry from a file an earlier init wrote. `reins doctor`
-  reports the Claude Code version and flags a file that would be ignored. When
-  the version cannot be read, init writes all four hooks and says so.
+  reports the Claude Code version and flags a file that would be ignored.
+- **Safeguards for an unknown Claude Code version.** The fourth hook is
+  written only on evidence. The version is read from `claude --version`, from
+  the environment of the session `reins init` is run in, and from the version
+  a reins hook last saw in the project; the oldest one decides. With none
+  readable, init writes the three hooks every version accepts and says so.
+  `reins init --failure-hook` writes it on the person's word, and is refused
+  on a version known to be old. Each hook now notes that it ran in
+  `.reins/hooks-seen.json`, and `reins doctor` says whether a hook has run
+  since the settings file last changed.
 - **The claim check called a masked test run "verified".** `npm test || true`,
   `npm test; echo done`, `npm test &` and `if npm test; then …` end with
   another command's exit status. They are now "result not visible".

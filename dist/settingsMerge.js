@@ -13,12 +13,14 @@ const settingsBlock_1 = require("./settingsBlock");
  * unknown event makes an old Claude Code load no hooks at all. A hook of the
  * user's own under that event is theirs and stays.
  */
-function mergeReinsHooks(input, without = []) {
+function mergeReinsHooks(input, without = [], 
+/** False leaves an existing entry for a `without` event alone: the version is unknown, so nothing is known to be wrong with it. */
+strip = true) {
     const settings = { ...(input ?? {}) };
     const hooks = { ...(settings.hooks ?? {}) };
     let added = 0;
     let removed = 0;
-    for (const event of without) {
+    for (const event of strip ? without : []) {
         if (!Array.isArray(hooks[event]))
             continue;
         const kept = hooks[event].filter((e) => !(e.hooks ?? []).some((h) => (h.command ?? "").includes("reins hook")));

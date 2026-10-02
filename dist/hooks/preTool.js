@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runPreTool = runPreTool;
+const heartbeat_1 = require("../heartbeat");
 const util_1 = require("../util");
 const paths_1 = require("../paths");
 const guards_1 = require("../guards");
@@ -28,6 +29,7 @@ async function runPreTool() {
     // replayed through this hook on resume carrying the SAME id, which is what
     // lets an approval be bound to one exact call rather than to its form.
     const toolUseId = payload.tool_use_id || "";
+    (0, heartbeat_1.markHookRan)("PreToolUse", sessionId, cwd);
     // 1. GUARD — the decision point. "deny" is the hard veto; "ask" escalates to
     //    the human via the native permission prompt. If anything here is uncertain
     //    we fail open (allow), but the matching itself is deterministic.

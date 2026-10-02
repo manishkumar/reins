@@ -1,3 +1,4 @@
+import { markHookRan } from "../heartbeat";
 import { readStdinJson, nowIso } from "../util";
 import { resolveProjectDir } from "../paths";
 import { readTranscriptTotals } from "../transcript";
@@ -23,6 +24,7 @@ export async function runStop(): Promise<void> {
   const payload = await readStdinJson();
   const cwd = (payload.cwd as string) || undefined;
   const sessionId = (payload.session_id as string) || "";
+  markHookRan("Stop", sessionId, cwd);
 
   // 1. Deliver pending steering (targeted-for-this-session first, then the
   //    broadcast — same preference order as the pre-tool boundary). Runs even

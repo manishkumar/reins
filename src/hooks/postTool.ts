@@ -1,3 +1,4 @@
+import { markHookRan } from "../heartbeat";
 import { readStdinJson, summarizeToolInput, hashToolInput, nowIso, truncate } from "../util";
 import { resolveProjectDir } from "../paths";
 import { loadConfig } from "../config";
@@ -19,6 +20,7 @@ export async function runPostTool(failed = false): Promise<void> {
   const toolName = (payload.tool_name as string) || "";
   const toolInput = payload.tool_input ?? {};
   const toolResponse = payload.tool_response;
+  markHookRan(failed ? "PostToolUseFailure" : "PostToolUse", sessionId, cwd);
 
   const inputHash = hashToolInput(toolName, toolInput);
   const summary = summarizeToolInput(toolName, toolInput);

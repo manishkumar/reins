@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runPostTool = runPostTool;
+const heartbeat_1 = require("../heartbeat");
 const util_1 = require("../util");
 const paths_1 = require("../paths");
 const config_1 = require("../config");
@@ -21,6 +22,7 @@ async function runPostTool(failed = false) {
     const toolName = payload.tool_name || "";
     const toolInput = payload.tool_input ?? {};
     const toolResponse = payload.tool_response;
+    (0, heartbeat_1.markHookRan)(failed ? "PostToolUseFailure" : "PostToolUse", sessionId, cwd);
     const inputHash = (0, util_1.hashToolInput)(toolName, toolInput);
     const summary = (0, util_1.summarizeToolInput)(toolName, toolInput);
     // An interrupted call says nothing about whether the command works.

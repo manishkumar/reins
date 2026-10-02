@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runStop = runStop;
+const heartbeat_1 = require("../heartbeat");
 const util_1 = require("../util");
 const paths_1 = require("../paths");
 const transcript_1 = require("../transcript");
@@ -25,6 +26,7 @@ async function runStop() {
     const payload = await (0, util_1.readStdinJson)();
     const cwd = payload.cwd || undefined;
     const sessionId = payload.session_id || "";
+    (0, heartbeat_1.markHookRan)("Stop", sessionId, cwd);
     // 1. Deliver pending steering (targeted-for-this-session first, then the
     //    broadcast — same preference order as the pre-tool boundary). Runs even
     //    for sessionless manual invocations, mirroring pre-tool semantics.

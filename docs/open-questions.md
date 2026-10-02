@@ -49,10 +49,12 @@ would be ignored.
 
 Still open:
 
-- When `claude` is not on PATH the version is unknown, and init writes all
-  four hooks with a warning. The other choice is to leave the hook out
-  whenever the version is unknown, which loses failed-call capture for those
-  installs.
+- Decided: with the version unknown, init writes three hooks and leaves
+  `PostToolUseFailure` out. The version is also read from the session's
+  environment and from what a hook last saw, and `reins doctor` reports
+  whether a hook has run since the settings file changed. The cost is that a
+  current install whose `claude` is not on PATH starts without failed-call
+  capture until init is run again with a version known.
 - A committed `.claude/settings.json` is read by every teammate's Claude Code.
   One person on an old version gets no hooks from a file written for a current
   one, and reins cannot see that from another machine.

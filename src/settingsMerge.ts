@@ -28,13 +28,18 @@ export interface MergeOutcome {
  * unknown event makes an old Claude Code load no hooks at all. A hook of the
  * user's own under that event is theirs and stays.
  */
-export function mergeReinsHooks(input: Record<string, unknown> | null | undefined, without: string[] = []): MergeOutcome {
+export function mergeReinsHooks(
+  input: Record<string, unknown> | null | undefined,
+  without: string[] = [],
+  /** False leaves an existing entry for a `without` event alone: the version is unknown, so nothing is known to be wrong with it. */
+  strip = true,
+): MergeOutcome {
   const settings: Record<string, unknown> = { ...(input ?? {}) };
   const hooks = { ...((settings.hooks as Record<string, HookEntry[]>) ?? {}) };
   let added = 0;
   let removed = 0;
 
-  for (const event of without) {
+  for (const event of strip ? without : []) {
     if (!Array.isArray(hooks[event])) continue;
     const kept = hooks[event].filter((e) => !(e.hooks ?? []).some((h) => (h.command ?? "").includes("reins hook")));
     removed += hooks[event].length - kept.length;

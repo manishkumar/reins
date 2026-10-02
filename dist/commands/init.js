@@ -45,11 +45,13 @@ const settingsMerge_1 = require("../settingsMerge");
 const store_1 = require("../store");
 const modInstall_1 = require("../modInstall");
 const claudeVersion_1 = require("../claudeVersion");
+const heartbeat_1 = require("../heartbeat");
 const format_1 = require("./format");
 function cmdInit(args) {
     const printOnly = args.includes("--print") || args.includes("-p");
     const useLocal = args.includes("--local");
     const withMod = args.includes("--mod");
+    const forceFailureHook = args.includes("--failure-hook");
     // init always targets the CURRENT directory (it's an explicit "set up here"),
     // never a parent project found by walk-up.
     const here = process.cwd();
@@ -75,8 +77,10 @@ function cmdInit(args) {
     console.log("");
     // An old Claude Code loads no hooks from a file that names an event it does
     // not know, so the failure hook is left out there.
-    const claude = (0, claudeVersion_1.claudeCodeVersion)();
-    const without = (0, claudeVersion_1.predatesFailureHook)(claude) ? [claudeVersion_1.FAILURE_HOOK] : [];
+    // The hook is written only on evidence that every Claude Code seen knows it.
+    const claude = (0, claudeVersion_1.claudeCodeVersion)((0, heartbeat_1.readHooksSeen)(dir)?.claude);
+    const old = (0, claudeVersion_1.predatesFailureHook)(claude);
+    const without = (0, claudeVersion_1.mayWriteFailureHook)(claude) || (forceFailureHook && !old) ? [] : [claudeVersion_1.FAILURE_HOOK];
     if (printOnly) {
         console.log(format_1.c.bold("Add this to ") + format_1.c.cyan(".claude/settings.json") + ":");
         console.log("");
@@ -86,7 +90,8 @@ function cmdInit(args) {
     }
     else {
         const settingsFile = path.join(process.cwd(), ".claude", useLocal ? "settings.local.json" : "settings.json");
-        const result = mergeHooks(settingsFile, without);
+        // Known old: take our entry out. Unknown: leave what is there alone.
+        const result = mergeHooks(settingsFile, without, old);
         switch (result.status) {
             case "added":
                 console.log(format_1.c.green("✓ Wired hooks into ") + format_1.c.cyan(rel(settingsFile)));
@@ -102,12 +107,20 @@ function cmdInit(args) {
                 console.log((0, settingsBlock_1.settingsBlockJson)(without));
                 break;
         }
-        if (without.length > 0) {
+        if (old) {
             console.log(format_1.c.yellow("  ! ") + format_1.c.dim(`Claude Code ${claude} is older than ${claudeVersion_1.FAILURE_HOOK_SINCE} and loads no hooks from a settings file that names ${claudeVersion_1.FAILURE_HOOK}.`));
             console.log(format_1.c.dim(`    That hook is left out, so failed tool calls are not captured. Run reins init again after upgrading Claude Code.`));
+            if (forceFailureHook)
+                console.log(format_1.c.dim(`    --failure-hook was not applied: on this version it would turn every hook off.`));
+        }
+        else if (claude === null && without.length > 0) {
+            console.log(format_1.c.yellow("  ! ") + format_1.c.dim(`Could not tell which Claude Code is installed, so ${claudeVersion_1.FAILURE_HOOK} is left out. Older versions load no hooks from a file that names it.`));
+            console.log(format_1.c.dim(`    Guards, holds and steering work. Failed tool calls are not captured.`));
+            console.log(format_1.c.dim(`    Run reins init again from inside a Claude Code session, or after one tool call in this project, and it will know.`));
+            console.log(format_1.c.dim(`    If your Claude Code is ${claudeVersion_1.FAILURE_HOOK_SINCE} or newer: reins init --failure-hook`));
         }
         else if (claude === null) {
-            console.log(format_1.c.yellow("  ! ") + format_1.c.dim(`Could not run claude --version. A Claude Code older than ${claudeVersion_1.FAILURE_HOOK_SINCE} loads no hooks from this file: check with reins doctor.`));
+            console.log(format_1.c.yellow("  ! ") + format_1.c.dim(`${claudeVersion_1.FAILURE_HOOK} written on your word (--failure-hook). Check with reins doctor after one tool call.`));
         }
         if (withMod)
             reportMod(here);
@@ -150,7 +163,7 @@ function reportMod(here) {
  * everything else. Never overwrites a file it can't parse (avoids clobbering a
  * user's settings on a stray syntax error).
  */
-function mergeHooks(settingsFile, without) {
+function mergeHooks(settingsFile, without, strip) {
     let parsed = {};
     if (fs.existsSync(settingsFile)) {
         const raw = fs.readFileSync(settingsFile, "utf8").trim();
@@ -166,7 +179,7 @@ function mergeHooks(settingsFile, without) {
     else {
         fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
     }
-    const { settings, added, removed } = (0, settingsMerge_1.mergeReinsHooks)(parsed, without);
+    const { settings, added, removed } = (0, settingsMerge_1.mergeReinsHooks)(parsed, without, strip);
     if (added === 0 && removed === 0)
         return { status: "already", detail: "" };
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");

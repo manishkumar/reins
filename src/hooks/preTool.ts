@@ -1,3 +1,4 @@
+import { markHookRan } from "../heartbeat";
 import { readStdinJson, summarizeToolInput, hashToolInput, nowIso } from "../util";
 import { resolveProjectDir } from "../paths";
 import { loadGuards, checkGuards, GuardRule } from "../guards";
@@ -34,6 +35,7 @@ export async function runPreTool(): Promise<void> {
   // replayed through this hook on resume carrying the SAME id, which is what
   // lets an approval be bound to one exact call rather than to its form.
   const toolUseId = (payload.tool_use_id as string) || "";
+  markHookRan("PreToolUse", sessionId, cwd);
 
   // 1. GUARD — the decision point. "deny" is the hard veto; "ask" escalates to
   //    the human via the native permission prompt. If anything here is uncertain

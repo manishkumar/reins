@@ -8,13 +8,15 @@ import { settingsBlockJson } from "../settingsBlock";
 import { mergeReinsHooks } from "../settingsMerge";
 import { getDriver, capabilityNote } from "../store";
 import { installMod } from "../modInstall";
-import { claudeCodeVersion, predatesFailureHook, FAILURE_HOOK, FAILURE_HOOK_SINCE } from "../claudeVersion";
+import { claudeCodeVersion, predatesFailureHook, mayWriteFailureHook, FAILURE_HOOK, FAILURE_HOOK_SINCE } from "../claudeVersion";
+import { readHooksSeen } from "../heartbeat";
 import { c } from "./format";
 
 export function cmdInit(args: string[]): number {
   const printOnly = args.includes("--print") || args.includes("-p");
   const useLocal = args.includes("--local");
   const withMod = args.includes("--mod");
+  const forceFailureHook = args.includes("--failure-hook");
 
   // init always targets the CURRENT directory (it's an explicit "set up here"),
   // never a parent project found by walk-up.
@@ -42,8 +44,10 @@ export function cmdInit(args: string[]): number {
 
   // An old Claude Code loads no hooks from a file that names an event it does
   // not know, so the failure hook is left out there.
-  const claude = claudeCodeVersion();
-  const without = predatesFailureHook(claude) ? [FAILURE_HOOK] : [];
+  // The hook is written only on evidence that every Claude Code seen knows it.
+  const claude = claudeCodeVersion(readHooksSeen(dir)?.claude);
+  const old = predatesFailureHook(claude);
+  const without = mayWriteFailureHook(claude) || (forceFailureHook && !old) ? [] : [FAILURE_HOOK];
 
   if (printOnly) {
     console.log(c.bold("Add this to ") + c.cyan(".claude/settings.json") + ":");
@@ -57,7 +61,8 @@ export function cmdInit(args: string[]): number {
       ".claude",
       useLocal ? "settings.local.json" : "settings.json",
     );
-    const result = mergeHooks(settingsFile, without);
+    // Known old: take our entry out. Unknown: leave what is there alone.
+    const result = mergeHooks(settingsFile, without, old);
     switch (result.status) {
       case "added":
         console.log(c.green("✓ Wired hooks into ") + c.cyan(rel(settingsFile)));
@@ -73,11 +78,17 @@ export function cmdInit(args: string[]): number {
         console.log(settingsBlockJson(without));
         break;
     }
-    if (without.length > 0) {
+    if (old) {
       console.log(c.yellow("  ! ") + c.dim(`Claude Code ${claude} is older than ${FAILURE_HOOK_SINCE} and loads no hooks from a settings file that names ${FAILURE_HOOK}.`));
       console.log(c.dim(`    That hook is left out, so failed tool calls are not captured. Run reins init again after upgrading Claude Code.`));
+      if (forceFailureHook) console.log(c.dim(`    --failure-hook was not applied: on this version it would turn every hook off.`));
+    } else if (claude === null && without.length > 0) {
+      console.log(c.yellow("  ! ") + c.dim(`Could not tell which Claude Code is installed, so ${FAILURE_HOOK} is left out. Older versions load no hooks from a file that names it.`));
+      console.log(c.dim(`    Guards, holds and steering work. Failed tool calls are not captured.`));
+      console.log(c.dim(`    Run reins init again from inside a Claude Code session, or after one tool call in this project, and it will know.`));
+      console.log(c.dim(`    If your Claude Code is ${FAILURE_HOOK_SINCE} or newer: reins init --failure-hook`));
     } else if (claude === null) {
-      console.log(c.yellow("  ! ") + c.dim(`Could not run claude --version. A Claude Code older than ${FAILURE_HOOK_SINCE} loads no hooks from this file: check with reins doctor.`));
+      console.log(c.yellow("  ! ") + c.dim(`${FAILURE_HOOK} written on your word (--failure-hook). Check with reins doctor after one tool call.`));
     }
     if (withMod) reportMod(here);
     console.log("");
@@ -127,7 +138,7 @@ interface MergeResult {
  * everything else. Never overwrites a file it can't parse (avoids clobbering a
  * user's settings on a stray syntax error).
  */
-function mergeHooks(settingsFile: string, without: string[]): MergeResult {
+function mergeHooks(settingsFile: string, without: string[], strip: boolean): MergeResult {
   let parsed: Record<string, unknown> = {};
   if (fs.existsSync(settingsFile)) {
     const raw = fs.readFileSync(settingsFile, "utf8").trim();
@@ -142,7 +153,7 @@ function mergeHooks(settingsFile: string, without: string[]): MergeResult {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   }
 
-  const { settings, added, removed } = mergeReinsHooks(parsed, without);
+  const { settings, added, removed } = mergeReinsHooks(parsed, without, strip);
   if (added === 0 && removed === 0) return { status: "already", detail: "" };
 
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
