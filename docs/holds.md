@@ -25,7 +25,7 @@ reins deny ab12cd34 --steer "open a PR instead of pushing to main"
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/hold-queue.svg" alt="The full hold-queue loop: a hold rule parks the agent's npm install and shows you a one-line HELD notice with the approve command, reins pending lists it, reins approve signs it off, and the agent's retry runs at its next tool boundary" width="720">
+  <img src="../assets/hold-queue.svg" alt="The full hold-queue loop: a hold rule parks the agent's npm install and shows you a one-line HELD notice with the approve command, reins pending lists it, reins approve signs it off, and the agent's retry runs at its next tool boundary" width="720">
 </p>
 
 <details>

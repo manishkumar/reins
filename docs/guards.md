@@ -17,13 +17,13 @@ reins guard reset                             # back to defaults
 Rules live in **`.reins/policy.json`** (renamed from `guards.json` in 0.4 — old files still load forever; the first save upgrades in place, and the pre-existing `guards.json` is left untouched, never deleted out from under you). A rule can also carry `"expires": "2026-09-01"` so a temporary hold doesn't outlive its reason — an expired rule is simply inactive, not deleted. `reins doctor` validates the policy file: bad regex/glob, unknown type/action, duplicate ids, a malformed `expires`, and foot-guns like a pattern broad enough to match everything or an `--ask` rule in a headless setup.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
+  <img src="../assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
 </p>
 
 **`--ask` is the middle hardness.** Some actions aren't *never* — they're *check with me first* (pushes, prod-adjacent commands, package publishes). An `ask` rule doesn't veto; it makes Claude Code pause and show **you** the exact call with your rule's reason, and you approve or deny it in the moment (`permissionDecision: "ask"`).
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/ask-prompt.svg" alt="A guard with --ask stopping a git push: Claude Code shows its own permission prompt with the reins rule's reason, and waits for the developer to answer yes or no" width="880">
+  <img src="../assets/ask-prompt.svg" alt="A guard with --ask stopping a git push: Claude Code shows its own permission prompt with the reins rule's reason, and waits for the developer to answer yes or no" width="880">
 </p>
 
 One thing to know: it needs a human at the terminal — in a headless/non-interactive run there's no one to ask, so `ask` effectively denies there. When you need a wall that holds unconditionally, that's `deny` (the default); when nobody is watching, that's `--hold`, in [holds.md](holds.md).

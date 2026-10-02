@@ -17,7 +17,7 @@ Nudge it mid-run · block what it must never do · hold risky actions for your a
 </div>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/cockpit-review-queue.svg" alt="reins watch after an overnight run: two held actions and a worked-around guard under NEEDS YOU, six agents listed with a looping one first, and the detail of a held terraform apply showing its rule, reason, session, how long it has waited and the full proposed command with the matched line lifted above it" width="960">
+  <img src="assets/cockpit-review-queue.svg" alt="reins watch after an overnight run: two held actions and a worked-around guard under NEEDS YOU, six agents listed with a looping one first, and the detail of a held terraform apply showing its rule, reason, session, how long it has waited and the full proposed command with the matched line lifted above it" width="960">
 </p>
 
 <p align="center"><sub><code>reins watch</code> after an overnight run. Two actions are held for approval, one agent is looping, and the line that tripped the rule is lifted out of a nine-line command. Rendered by the cockpit's own renderer from a scripted scenario (<code>assets/cockpit-demo-frame.cjs</code>).</sub></p>
@@ -98,7 +98,7 @@ Treat a steer as the detail you forgot to put in the prompt. A steer that contra
 With several agents in one repo, `reins steer` asks which one you mean, or takes `--session <name>`.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/steer-picker.svg" alt="reins steer with several live sessions: a picker lists each agent by name with its status and last tool call, and asks where the steer should land" width="820">
+  <img src="assets/steer-picker.svg" alt="reins steer with several live sessions: a picker lists each agent by name with its status and last tool call, and asks where the steer should land" width="820">
 </p>
 
 Details and caveats: [docs/steering.md](docs/steering.md).
@@ -119,7 +119,7 @@ reins guard list
 A deny holds under `--permission-mode bypassPermissions`. reins ships a default denylist: recursive `rm` outside build and scratch directories, force pushes, `git reset --hard`, `DROP`/`TRUNCATE`, `curl … | sh`, and writes to `.env*` and `.git/**`. `reins scan` proposes rules from your repo's own manifests, and `reins policy upgrade` refreshes shipped rules while keeping yours.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
+  <img src="assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
 </p>
 
 Details, the measured false-positive rate, and `reins audit --guards`: [docs/guards.md](docs/guards.md).
@@ -139,7 +139,7 @@ reins deny ab12cd34 --steer "open a PR instead of pushing to main"
 An approval is bound to one proposal: the same input, from the same session and directory, one time. A changed retry parks again.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/hold-queue.svg" alt="The full hold-queue loop: a hold rule parks the agent's npm install and shows you a one-line HELD notice with the approve command, reins pending lists it, reins approve signs it off, and the agent's retry runs at its next tool boundary" width="720">
+  <img src="assets/hold-queue.svg" alt="The full hold-queue loop: a hold rule parks the agent's npm install and shows you a one-line HELD notice with the approve command, reins pending lists it, reins approve signs it off, and the agent's retry runs at its next tool boundary" width="720">
 </p>
 
 Transports, breach reporting and every caveat: [docs/holds.md](docs/holds.md).
@@ -149,13 +149,13 @@ Transports, breach reporting and every caveat: [docs/holds.md](docs/holds.md).
 One screen shows every agent in the repo and everything waiting on you. From it you approve or deny held actions and steer one agent or all of them. It is the control surface for unattended and headless runs and for several agents at once.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/cockpit-agent.svg" alt="reins watch with a long-running agent selected: the detail pane shows what it was asked, its branch, its claim check verdict, the files it edited by directory, the commands it ran, and its trajectory newest first" width="960">
+  <img src="assets/cockpit-agent.svg" alt="reins watch with a long-running agent selected: the detail pane shows what it was asked, its branch, its claim check verdict, the files it edited by directory, the commands it ran, and its trajectory newest first" width="960">
 </p>
 
 <p align="center"><sub>A long-running agent, selected. The detail pane puts what it was asked beside what it edited and ran.</sub></p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/manishkumar/reins/main/assets/cockpit-approve.svg" alt="reins watch approve dialog: 'Approve this exact call, once?' with the rule, reason, session, directory and the exact input, the matched line marked, and y to approve or esc to cancel" width="960">
+  <img src="assets/cockpit-approve.svg" alt="reins watch approve dialog: 'Approve this exact call, once?' with the rule, reason, session, directory and the exact input, the matched line marked, and y to approve or esc to cancel" width="960">
 </p>
 
 <p align="center"><sub>Approving. The dialog shows the whole input, marks the line the rule matched, and keeps <code>y</code> locked until you have scrolled to the end.</sub></p>
