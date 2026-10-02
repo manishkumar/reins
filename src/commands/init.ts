@@ -8,6 +8,7 @@ import { settingsBlockJson } from "../settingsBlock";
 import { mergeReinsHooks } from "../settingsMerge";
 import { getDriver, capabilityNote } from "../store";
 import { installMod } from "../modInstall";
+import { claudeCodeVersion, predatesFailureHook, FAILURE_HOOK, FAILURE_HOOK_SINCE } from "../claudeVersion";
 import { c } from "./format";
 
 export function cmdInit(args: string[]): number {
@@ -39,10 +40,15 @@ export function cmdInit(args: string[]): number {
 
   console.log("");
 
+  // An old Claude Code loads no hooks from a file that names an event it does
+  // not know, so the failure hook is left out there.
+  const claude = claudeCodeVersion();
+  const without = predatesFailureHook(claude) ? [FAILURE_HOOK] : [];
+
   if (printOnly) {
     console.log(c.bold("Add this to ") + c.cyan(".claude/settings.json") + ":");
     console.log("");
-    console.log(settingsBlockJson());
+    console.log(settingsBlockJson(without));
     console.log("");
     console.log(c.dim("(Requires `npm i -g reins`, or replace `reins` with `npx reins`.)"));
   } else {
@@ -51,7 +57,7 @@ export function cmdInit(args: string[]): number {
       ".claude",
       useLocal ? "settings.local.json" : "settings.json",
     );
-    const result = mergeHooks(settingsFile);
+    const result = mergeHooks(settingsFile, without);
     switch (result.status) {
       case "added":
         console.log(c.green("✓ Wired hooks into ") + c.cyan(rel(settingsFile)));
@@ -64,8 +70,14 @@ export function cmdInit(args: string[]): number {
         console.log(c.red("! Could not parse ") + c.cyan(rel(settingsFile)));
         console.log(c.dim("  Left it untouched. Add this block manually:"));
         console.log("");
-        console.log(settingsBlockJson());
+        console.log(settingsBlockJson(without));
         break;
+    }
+    if (without.length > 0) {
+      console.log(c.yellow("  ! ") + c.dim(`Claude Code ${claude} is older than ${FAILURE_HOOK_SINCE} and loads no hooks from a settings file that names ${FAILURE_HOOK}.`));
+      console.log(c.dim(`    That hook is left out, so failed tool calls are not captured. Run reins init again after upgrading Claude Code.`));
+    } else if (claude === null) {
+      console.log(c.yellow("  ! ") + c.dim(`Could not run claude --version. A Claude Code older than ${FAILURE_HOOK_SINCE} loads no hooks from this file: check with reins doctor.`));
     }
     if (withMod) reportMod(here);
     console.log("");
@@ -115,7 +127,7 @@ interface MergeResult {
  * everything else. Never overwrites a file it can't parse (avoids clobbering a
  * user's settings on a stray syntax error).
  */
-function mergeHooks(settingsFile: string): MergeResult {
+function mergeHooks(settingsFile: string, without: string[]): MergeResult {
   let parsed: Record<string, unknown> = {};
   if (fs.existsSync(settingsFile)) {
     const raw = fs.readFileSync(settingsFile, "utf8").trim();
@@ -130,13 +142,15 @@ function mergeHooks(settingsFile: string): MergeResult {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   }
 
-  const { settings, added } = mergeReinsHooks(parsed);
-  if (added === 0) return { status: "already", detail: "" };
+  const { settings, added, removed } = mergeReinsHooks(parsed, without);
+  if (added === 0 && removed === 0) return { status: "already", detail: "" };
 
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
+  const events = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"].filter((e) => !without.includes(e));
+  const took = removed > 0 ? ` ${without.join(", ")} removed.` : "";
   return {
     status: "added",
-    detail: `${added} hook${added === 1 ? "" : "s"} added (PreToolUse, PostToolUse, PostToolUseFailure, Stop).`,
+    detail: `${added} hook${added === 1 ? "" : "s"} added (${events.join(", ")}).${took}`,
   };
 }
 

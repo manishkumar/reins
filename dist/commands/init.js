@@ -44,6 +44,7 @@ const settingsBlock_1 = require("../settingsBlock");
 const settingsMerge_1 = require("../settingsMerge");
 const store_1 = require("../store");
 const modInstall_1 = require("../modInstall");
+const claudeVersion_1 = require("../claudeVersion");
 const format_1 = require("./format");
 function cmdInit(args) {
     const printOnly = args.includes("--print") || args.includes("-p");
@@ -72,16 +73,20 @@ function cmdInit(args) {
     else
         console.log(format_1.c.dim(`  · capture       enabled via ${(0, store_1.getDriver)().name}`));
     console.log("");
+    // An old Claude Code loads no hooks from a file that names an event it does
+    // not know, so the failure hook is left out there.
+    const claude = (0, claudeVersion_1.claudeCodeVersion)();
+    const without = (0, claudeVersion_1.predatesFailureHook)(claude) ? [claudeVersion_1.FAILURE_HOOK] : [];
     if (printOnly) {
         console.log(format_1.c.bold("Add this to ") + format_1.c.cyan(".claude/settings.json") + ":");
         console.log("");
-        console.log((0, settingsBlock_1.settingsBlockJson)());
+        console.log((0, settingsBlock_1.settingsBlockJson)(without));
         console.log("");
         console.log(format_1.c.dim("(Requires `npm i -g reins`, or replace `reins` with `npx reins`.)"));
     }
     else {
         const settingsFile = path.join(process.cwd(), ".claude", useLocal ? "settings.local.json" : "settings.json");
-        const result = mergeHooks(settingsFile);
+        const result = mergeHooks(settingsFile, without);
         switch (result.status) {
             case "added":
                 console.log(format_1.c.green("✓ Wired hooks into ") + format_1.c.cyan(rel(settingsFile)));
@@ -94,8 +99,15 @@ function cmdInit(args) {
                 console.log(format_1.c.red("! Could not parse ") + format_1.c.cyan(rel(settingsFile)));
                 console.log(format_1.c.dim("  Left it untouched. Add this block manually:"));
                 console.log("");
-                console.log((0, settingsBlock_1.settingsBlockJson)());
+                console.log((0, settingsBlock_1.settingsBlockJson)(without));
                 break;
+        }
+        if (without.length > 0) {
+            console.log(format_1.c.yellow("  ! ") + format_1.c.dim(`Claude Code ${claude} is older than ${claudeVersion_1.FAILURE_HOOK_SINCE} and loads no hooks from a settings file that names ${claudeVersion_1.FAILURE_HOOK}.`));
+            console.log(format_1.c.dim(`    That hook is left out, so failed tool calls are not captured. Run reins init again after upgrading Claude Code.`));
+        }
+        else if (claude === null) {
+            console.log(format_1.c.yellow("  ! ") + format_1.c.dim(`Could not run claude --version. A Claude Code older than ${claudeVersion_1.FAILURE_HOOK_SINCE} loads no hooks from this file: check with reins doctor.`));
         }
         if (withMod)
             reportMod(here);
@@ -138,7 +150,7 @@ function reportMod(here) {
  * everything else. Never overwrites a file it can't parse (avoids clobbering a
  * user's settings on a stray syntax error).
  */
-function mergeHooks(settingsFile) {
+function mergeHooks(settingsFile, without) {
     let parsed = {};
     if (fs.existsSync(settingsFile)) {
         const raw = fs.readFileSync(settingsFile, "utf8").trim();
@@ -154,13 +166,15 @@ function mergeHooks(settingsFile) {
     else {
         fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
     }
-    const { settings, added } = (0, settingsMerge_1.mergeReinsHooks)(parsed);
-    if (added === 0)
+    const { settings, added, removed } = (0, settingsMerge_1.mergeReinsHooks)(parsed, without);
+    if (added === 0 && removed === 0)
         return { status: "already", detail: "" };
     fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
+    const events = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"].filter((e) => !without.includes(e));
+    const took = removed > 0 ? ` ${without.join(", ")} removed.` : "";
     return {
         status: "added",
-        detail: `${added} hook${added === 1 ? "" : "s"} added (PreToolUse, PostToolUse, PostToolUseFailure, Stop).`,
+        detail: `${added} hook${added === 1 ? "" : "s"} added (${events.join(", ")}).${took}`,
     };
 }
 function rel(p) {

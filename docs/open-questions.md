@@ -29,14 +29,35 @@ Options: leave it; read the test runner's summary line from the tool response
 `set -o pipefail`. The second means parsing output formats, which is a larger
 commitment than matching command names.
 
-## 3. What does an older Claude Code do with the `PostToolUseFailure` key?
+## 3. Answered: an older Claude Code drops every hook when it sees the `PostToolUseFailure` key
 
-`reins init` now writes a fourth hook, `PostToolUseFailure`. On 2.1.287 it
-works: a failing command is captured with `ok = 0`. Whether a Claude Code
-version from before that event existed ignores the unknown key or rejects the
-settings file was not tested. No older version was available here. If it
-rejects, `reins init` on an old Claude Code would break that user's settings,
-and init would need a version check.
+Measured on 2026-10-02 by running old releases (under Bun, since they do not
+start on Node 25) headless in a project set up by `reins init`:
+
+| Claude Code | settings file names `PostToolUseFailure` | reins hooks ran |
+|---|---|---|
+| 2.0.0 | yes | no |
+| 2.0.0 | no | yes |
+| 2.0.55 | yes | no |
+| 2.0.55 | no (after the fix) | yes |
+| 2.0.56 | yes | yes |
+
+2.0.56 is the first release whose `cli.js` contains the event name. Older
+versions print no error. `reins init` now leaves the hook out when
+`claude --version` is older than 2.0.56, and `reins doctor` flags a file that
+would be ignored.
+
+Still open:
+
+- When `claude` is not on PATH the version is unknown, and init writes all
+  four hooks with a warning. The other choice is to leave the hook out
+  whenever the version is unknown, which loses failed-call capture for those
+  installs.
+- A committed `.claude/settings.json` is read by every teammate's Claude Code.
+  One person on an old version gets no hooks from a file written for a current
+  one, and reins cannot see that from another machine.
+- 1.0.0 could not be run: the API refused its default model. It does not
+  contain the event name either.
 
 ## 4. Should failed calls feed the loop alarm and breach detection by default?
 

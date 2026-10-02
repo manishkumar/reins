@@ -120,6 +120,15 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Fixed
 
+- **`reins init` could turn off every hook on an older Claude Code.** Claude
+  Code 2.0.55 and older load no hooks from a settings file that names an event
+  they do not know, and `PostToolUseFailure` arrived in 2.0.56. On those
+  versions the four-hook block left reins not running at all, with no error.
+  Found by running 2.0.0, 2.0.55 and 2.0.56 against the same file. `reins
+  init` now reads `claude --version`, leaves the hook out on an older version
+  and removes its own entry from a file an earlier init wrote. `reins doctor`
+  reports the Claude Code version and flags a file that would be ignored. When
+  the version cannot be read, init writes all four hooks and says so.
 - **The claim check called a masked test run "verified".** `npm test || true`,
   `npm test; echo done`, `npm test &` and `if npm test; then …` end with
   another command's exit status. They are now "result not visible".

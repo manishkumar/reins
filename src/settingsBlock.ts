@@ -32,6 +32,8 @@ export const SETTINGS_BLOCK = {
   },
 };
 
-export function settingsBlockJson(): string {
-  return JSON.stringify(SETTINGS_BLOCK, null, 2);
+/** The block as text. `without` names events to leave out (see src/claudeVersion.ts). */
+export function settingsBlockJson(without: string[] = []): string {
+  const hooks = Object.fromEntries(Object.entries(SETTINGS_BLOCK.hooks).filter(([event]) => !without.includes(event)));
+  return JSON.stringify({ hooks }, null, 2);
 }

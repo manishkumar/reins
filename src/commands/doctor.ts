@@ -1,4 +1,5 @@
 import { SETTINGS_BLOCK } from "../settingsBlock";
+import { claudeCodeVersion, predatesFailureHook, FAILURE_HOOK, FAILURE_HOOK_SINCE } from "../claudeVersion";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { reinsDir, steeringPath } from "../paths";
@@ -123,11 +124,18 @@ export function cmdDoctor(): number {
   // Hook wiring
   console.log("");
   console.log(c.bold("Hook wiring (.claude)"));
+  const claude = claudeCodeVersion();
+  const old = predatesFailureHook(claude);
+  if (claude === null) line(WARN, "Claude Code", `could not run claude --version; a version older than ${FAILURE_HOOK_SINCE} loads no hooks from a file that names ${FAILURE_HOOK}`);
+  else line(OK, "Claude Code", old ? `${claude} (older than ${FAILURE_HOOK_SINCE}: no ${FAILURE_HOOK} event, so failed tool calls are not captured)` : claude);
   const wiring = [
-    checkSettings(path.join(process.cwd(), ".claude", "settings.json"), "settings.json", line),
-    checkSettings(path.join(process.cwd(), ".claude", "settings.local.json"), "settings.local.json", line),
+    checkSettings(path.join(process.cwd(), ".claude", "settings.json"), "settings.json", line, old),
+    checkSettings(path.join(process.cwd(), ".claude", "settings.local.json"), "settings.local.json", line, old),
   ];
-  if (!wiring.includes("full")) {
+  if (wiring.includes("dead")) {
+    problems++;
+    line(BAD, "hooks", `this Claude Code loads NO hooks from a file that names ${FAILURE_HOOK}: no guard, hold or steer runs. Run \`reins init\` to take it out, or upgrade Claude Code`);
+  } else if (!wiring.includes("full")) {
     problems++;
     line(
       WARN,
@@ -162,7 +170,8 @@ function checkSettings(
   file: string,
   label: string,
   line: (sym: string, label: string, detail: string) => void,
-): "full" | "partial" | "none" {
+  old: boolean,
+): "full" | "partial" | "none" | "dead" {
   if (!fs.existsSync(file)) return "none";
   let parsed: Record<string, unknown>;
   try {
@@ -172,7 +181,12 @@ function checkSettings(
     return "none";
   }
   const hooks = (parsed.hooks ?? {}) as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
-  const events = Object.keys(SETTINGS_BLOCK.hooks);
+  // An event this Claude Code does not know, from reins or anyone else.
+  if (old && FAILURE_HOOK in hooks) {
+    line(BAD, label, `names ${FAILURE_HOOK}, which this Claude Code does not know`);
+    return "dead";
+  }
+  const events = Object.keys(SETTINGS_BLOCK.hooks).filter((ev) => !(old && ev === FAILURE_HOOK));
   const wired = events.filter((ev) =>
     (hooks[ev] ?? []).some((e) => (e.hooks ?? []).some((h) => (h.command ?? "").includes("reins hook"))),
   );
