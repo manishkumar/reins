@@ -96,7 +96,9 @@ export function cmdInit(args: string[]): number {
   }
 
   console.log("");
-  console.log("Then, mid-run:  " + c.cyan('reins steer "focus the auth work on the token refresh path"'));
+  console.log("Next:");
+  console.log("  " + c.cyan('reins guard add bash "npm publish" --hold') + c.dim("   park an action until you approve it"));
+  console.log("  " + c.cyan("reins watch") + c.dim("                                 every agent, and everything waiting on you"));
   return 0;
 }
 

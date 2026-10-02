@@ -128,7 +128,9 @@ function cmdInit(args) {
         console.log(format_1.c.dim("Restart Claude Code in this project so it loads the hooks."));
     }
     console.log("");
-    console.log("Then, mid-run:  " + format_1.c.cyan('reins steer "focus the auth work on the token refresh path"'));
+    console.log("Next:");
+    console.log("  " + format_1.c.cyan('reins guard add bash "npm publish" --hold') + format_1.c.dim("   park an action until you approve it"));
+    console.log("  " + format_1.c.cyan("reins watch") + format_1.c.dim("                                 every agent, and everything waiting on you"));
     return 0;
 }
 /**
