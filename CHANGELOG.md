@@ -98,9 +98,14 @@ All notable changes to `reins` are documented here. Format loosely follows
   also shown above the input with its line number. The match comes from the
   guard's own matcher (`firingSegment` in `src/guards.ts`, which
   `checkGuards` now decides with), read against the rule as it stands now.
-
-### Changed
-
+- **Bash rules no longer match heredoc text that is data.** A body handed to
+  `cat`, `tee`, `python`, `node`, `ruby` or `perl` is not a shell command, so
+  a Python script that mentions a guarded command no longer parks or blocks.
+  The body is still matched when anything may run it: a shell, `ssh`, a
+  database client or any other command, a pipe or command substitution on the
+  opening line, a `$(…)` or backtick in a body with an unquoted delimiter, or
+  a missing closing delimiter. This narrows what every bash rule matches,
+  `deny` rules included.
 - **The agent list leads with what waits on you.** Order is looping, then
   sessions with a held action, then newest first. A session with no call for
   over a day is counted in the footer and not listed, unless it is looping,

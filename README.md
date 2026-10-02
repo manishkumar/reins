@@ -222,10 +222,11 @@ Ships with a sane default denylist (override freely): recursive `rm` at a catast
 
 ### What guards are — and are not
 
-Guards are **deterministic vetoes on recognized patterns** — excellent speed bumps against accidents and obvious footguns, **not a sandbox.** Two honest limits:
+Guards are **deterministic vetoes on recognized patterns** — excellent speed bumps against accidents and obvious footguns, **not a sandbox.** The honest limits:
 
 - **They block a *form*, not an *intent*.** Blocked from `rm -rf foo`, an agent may still delete via `find -exec rm`; blocked from a `.env` Write it may try a shell redirect (we block the common redirect forms too, but the cat-and-mouse is unwinnable in general). For containment of a determined/adversarial agent, use OS-level sandboxing and real permission boundaries.
 - **They match raw command text, so false positives happen.** `git commit -m "removed the rm -rf call"` will be blocked by the `rm -rf` guard, because the pattern appears in the message. If a guard is too aggressive for your workflow, `reins guard remove <id>` it or edit `.reins/policy.json` — they're fully yours.
+- **Heredoc text that is data is not matched.** `python3 - <<'EOF' … EOF` and `cat > notes.md <<EOF … EOF` hand their body to a program as text, so a rule does not fire on what the body says. This applies only when the heredoc feeds `cat`, `tee`, `python`, `node`, `ruby` or `perl`, the opening line has no pipe or command substitution, and the closing delimiter is present. A body fed to a shell, `ssh`, a database client or anything unrecognised is still matched, and so is a body with `$(…)` or a backtick under an unquoted delimiter. The cost is the usual one: a script written this way and run later (`cat > x.sh <<'EOF'` then `sh x.sh`) is not read, the same as a script written with the Write tool.
 
 #### We measured how bad this is
 

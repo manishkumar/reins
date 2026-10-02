@@ -349,6 +349,90 @@ export function stripQuoted(cmd: string): string {
     .replace(/'[^']*'/g, " ");
 }
 
+type Quote = '"' | "'" | null;
+
+/** The quote still open after reading `text`, starting from `open`. */
+function quoteAfter(text: string, open: Quote): Quote {
+  let quote = open;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === "\\" && quote === '"') i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === "\\") i++;
+    else if (ch === '"' || ch === "'") quote = ch;
+  }
+  return quote;
+}
+
+/** Commands that read a heredoc as text or as a program in another language, never as shell. */
+const HEREDOC_DATA_READERS = /^(cat|tee|python[\d.]*|node|ruby|perl)$/;
+
+/**
+ * Remove heredoc bodies that are data, so a rule does not fire on text the
+ * shell never runs: `python3 - <<'EOF' … s = "git push" … EOF` proposes a
+ * Python program, not a push.
+ *
+ * A body is dropped only when every one of these holds. Anything else is left
+ * in and matched as before, so a doubt makes the guard fire more, never less:
+ *   - the command the heredoc feeds is a known reader (`cat`, `tee`, `python`,
+ *     `node`, `ruby`, `perl`). Not a shell (`bash <<EOF` runs its body), not a
+ *     database client (`psql <<EOF` runs SQL a rule may name), not anything
+ *     unrecognised;
+ *   - the opening line has no pipe, command substitution or second heredoc,
+ *     because `cat <<EOF | sh` and `sh -c "$(cat <<EOF` run the body;
+ *   - with an unquoted delimiter the shell expands the body, so it must hold
+ *     no `$(` and no backtick;
+ *   - the `<<` stands outside quotes and outside a comment, where the shell
+ *     reads it as a heredoc at all;
+ *   - the closing delimiter is found. Without one this is not a heredoc.
+ *
+ * Text on the opening line itself (`cat <<EOF > f && git push`) is never
+ * dropped. Lines are removed whole, so every remaining segment is still a
+ * substring of the original command.
+ */
+export function dropHeredocData(cmd: string): string {
+  if (!cmd.includes("<<")) return cmd;
+  const lines = cmd.split("\n");
+  const kept: string[] = [];
+  // A quote left open by an earlier line: this line starts inside a string.
+  let open: Quote = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    kept.push(line);
+    const startsQuoted = open !== null;
+    open = quoteAfter(line, open);
+    if (startsQuoted) continue;
+    const m = /(?<![<\\])<<(-?)[ \t]*(?:'(\w+)'|"(\w+)"|(\w+))/.exec(line);
+    if (!m) continue;
+    const before = line.slice(0, m.index);
+    const rest = before + " " + line.slice(m.index + m[0].length);
+    // The `<<` must stand outside quotes and comments, and the line must not
+    // hand the body to something that runs it.
+    if (quoteAfter(before, null) !== null || quoteAfter(line, null) !== null) continue;
+    if (/(^|\s)#/.test(stripQuoted(before))) continue;
+    if (/[|`]|\$\(|<\(|<</.test(stripQuoted(rest))) continue;
+    const feeds = splitCommandSegments(before).pop() ?? "";
+    const head = tokenizeArgs(feeds).find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
+    if (!HEREDOC_DATA_READERS.test(head.split("/").pop() ?? "")) continue;
+
+    const delim = m[2] ?? m[3] ?? m[4];
+    const quoted = m[4] === undefined;
+    let end = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      const candidate = m[1] ? lines[j].replace(/^\t+/, "") : lines[j];
+      if (candidate === delim) {
+        end = j;
+        break;
+      }
+    }
+    if (end < 0) continue;
+    if (!quoted && /\$\(|`/.test(lines.slice(i + 1, end).join("\n"))) continue;
+    i = end; // body and closing delimiter are data
+  }
+  return kept.join("\n");
+}
+
 /**
  * Split a shell command into independently-executed segments on `;`, `&&`,
  * `||`, `|` and newlines.
@@ -529,7 +613,7 @@ export function firingSegment(rule: GuardRule, command: string, cwd?: string): s
   // without clearing its neighbours. With no `except` the behaviour is
   // identical to matching the whole command: a pattern that matched the
   // full string matches the segment it lives in.
-  for (const segment of splitCommandSegments(command)) {
+  for (const segment of splitCommandSegments(dropHeredocData(command))) {
     const stripped = stripQuoted(segment);
     if (!re.test(stripped)) continue;
     // Exemptions are matched per ARGUMENT (see tokenizeArgs), so an

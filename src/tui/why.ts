@@ -1,4 +1,4 @@
-import { firingSegment, splitCommandSegments, type GuardRule } from "../guards";
+import { dropHeredocData, firingSegment, splitCommandSegments, type GuardRule } from "../guards";
 
 /**
  * Where in a held Bash command its rule matched, for the approver to read.
@@ -27,9 +27,10 @@ export function whyMatched(rule: GuardRule | undefined, command: string, cwd?: s
   const seg = firingSegment(rule, command, cwd);
   if (seg === null) return null;
 
-  // Segments are substrings of the command, in order.
+  // Segments are substrings of the command, in order. Read the same way the
+  // guard reads it, with heredoc data left out.
   let at = 0;
-  for (const s of splitCommandSegments(command)) {
+  for (const s of splitCommandSegments(dropHeredocData(command))) {
     at = command.indexOf(s, at);
     if (at < 0) return null;
     if (s === seg) break;

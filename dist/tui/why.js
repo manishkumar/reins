@@ -8,9 +8,10 @@ function whyMatched(rule, command, cwd) {
     const seg = (0, guards_1.firingSegment)(rule, command, cwd);
     if (seg === null)
         return null;
-    // Segments are substrings of the command, in order.
+    // Segments are substrings of the command, in order. Read the same way the
+    // guard reads it, with heredoc data left out.
     let at = 0;
-    for (const s of (0, guards_1.splitCommandSegments)(command)) {
+    for (const s of (0, guards_1.splitCommandSegments)((0, guards_1.dropHeredocData)(command))) {
         at = command.indexOf(s, at);
         if (at < 0)
             return null;
