@@ -103,15 +103,23 @@ function commandHeads(command) {
 }
 function relativeTo(root, file) {
     if (!path.isAbsolute(file))
-        return { path: file, outside: false };
+        return { path: slashed(file), outside: false };
     const rel = path.relative(root, file);
     if (rel.startsWith("..") || path.isAbsolute(rel))
         return { path: file, outside: true };
-    return { path: rel, outside: false };
+    return { path: slashed(rel), outside: false };
+}
+/** A path inside the project reads the same on every platform: `src/auth/login.ts`. */
+function slashed(p) {
+    return path.sep === "\\" ? p.split("\\").join("/") : p;
 }
 function dirOf(p) {
     const d = path.dirname(p);
-    return d === "." ? "./" : d.endsWith(path.sep) ? d : d + path.sep;
+    if (d === ".")
+        return "./";
+    // An outside path stays absolute and native; a project path was slashed above.
+    const sep = path.isAbsolute(p) && d.includes("\\") ? "\\" : "/";
+    return d.endsWith(sep) ? d : d + sep;
 }
 /**
  * The footprint as plain lines, the same on every surface. Empty when the

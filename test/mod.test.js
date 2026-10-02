@@ -86,7 +86,7 @@ test("reins init: the mod is opt-in, and reins uninstall takes it out", () => {
     run("init");
     assert.ok(!fs.existsSync(M.modTargetDir(dir)), "plain init installs no mod");
 
-    assert.match(run("init", "--mod"), /Installed the status mod in \.claude\/skills\/reins-status/);
+    assert.match(run("init", "--mod"), /Installed the status mod in \.claude[\\/]skills[\\/]reins-status/);
     for (const f of files(dir)) assert.ok(fs.existsSync(f), f);
     assert.match(run("init", "--mod"), /Status mod already installed/);
 
