@@ -1,8 +1,9 @@
 # CLAUDE.md
 
-reins is a kit of Claude Code hooks that lets a human steer a *running* agent: soft
-nudges (`steer`), hard vetoes (`guard`), an approval queue (`hold`), a loop alarm, and
-SQLite capture of every run. Local-first: no daemon, no backend, no accounts.
+reins is a kit of Claude Code hooks that keeps a human in control of agents they are
+not watching: an approval queue (`hold`), hard vetoes (`guard`), a cockpit over every
+agent (`watch`), soft nudges to a *running* agent (`steer`), a loop alarm, and SQLite
+capture of every run. Local-first: no daemon, no backend, no accounts.
 
 Read the README and the feature's page under `docs/` before changing behavior. The
 "honest caveats" sections in `docs/` and the README's "Before you rely on it" list are

@@ -2,9 +2,9 @@
 
 # 🐎 reins
 
-### Steer a running Claude Code agent without stopping it
+### Keep control of Claude Code agents you aren't watching
 
-Nudge it mid-run · block what it must never do · hold risky actions for your approval · see every agent on one screen
+Hold risky actions for your approval · block what must never run · see every agent on one screen · nudge one mid-run
 
 [![CI](https://github.com/manishkumar/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/manishkumar/reins/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -28,30 +28,34 @@ Local-first. No daemon, no backend, no account. Nothing leaves your machine.
 
 ## Why this exists
 
-You are watching an agent work and you can see it drifting: editing the wrong module, over-building, about to run something destructive. Your options are to let it finish and clean up, or to end the run and lose its context.
+An agent works for hours while you do something else, or overnight. At some point it reaches a deploy, a publish or a push to main. Without reins you have two choices: let it run actions nobody approved, or stay at the terminal to answer every prompt.
 
-reins adds a third option, built from Claude Code hooks:
+reins gives you a third, built from Claude Code hooks. The risky action is parked, the agent carries on with other work, and you decide when you are back:
+
+```text
+# the agent, at 02:14, nobody watching
+  ⏺ Bash(npm publish)
+  [reins] ⏸ HELD  npm publish
+    approve: reins approve ab12cd34   ·   see all: reins pending
+
+# you, in the morning
+  $ reins pending
+    ab12cd34  7h  3b9f2a1c  Bash  npm publish  [bash-npm-publish]
+  $ reins approve ab12cd34
+  ✓ Approved ab12cd34 (Bash: npm publish)
+```
+
+The approval clears that exact call, once. It permits the retry and does not run anything itself: a still-running agent is told to retry, and a session that has ended needs resuming.
 
 | When | What | Hardness |
 |---|---|---|
-| Before a tool runs | **Guard**: deny a command or path, ask you at the prompt, or hold the action for later approval | Hard veto, or your call |
+| Before a tool runs | **Hold**: park the action in a queue until you approve it | Your call, later |
+| Before a tool runs | **Guard**: deny a command or path, or ask you at the prompt | Hard veto, or your call |
+| Any time | **Cockpit**: every agent and everything waiting on you, on one screen | Observe and decide |
 | During the run | **Steer**: add a one-line note the agent reads at its next tool call | Soft. The model weighs it |
 | After each tool | **Loop alarm**: warn when the same call repeats in a row | Warn |
 | When a turn ends | **Claim check**: compare "done" with the tests and builds the session ran | Report |
 | Always | **Capture**: every run in a SQLite file you own | Observe |
-
-```text
-# terminal 1: the agent is mid-task and drifting
-  ⏺ Edit(src/login/flow.ts)
-
-# terminal 2: you, without ending the run
-  $ reins steer "focus on the token refresh path, leave the login flow alone"
-  ✓ queued — lands at the agent's next tool call
-
-# terminal 1: next tool call, same run, context intact
-  ⏺ [reins — live steering from the developer] folded in
-  ⏺ Edit(src/auth/refresh.ts)
-```
 
 The story behind it: [*I Built a Tool to Steer Running AI Agents. It Taught Me Where Their Real Cost Is.*](https://medium.com/@manishky/i-built-a-tool-to-steer-running-ai-agents-it-taught-me-where-their-real-cost-is-fc617abfcb07)
 
@@ -77,58 +81,26 @@ reins init          # creates .reins/ and merges the hooks into .claude/settings
 
 Restart Claude Code in the project so it loads the hooks. `reins init` merges into your settings and never overwrites them. `reins init --print` prints the block instead, and `reins init --local` writes to `settings.local.json`.
 
-Then start any task in Claude Code, and from another terminal:
+Then add a rule for something you want to sign off, start any task in Claude Code, and open the cockpit in another terminal:
 
 ```bash
-reins steer "keep the change minimal, and use the existing logger"
+reins guard add bash "npm publish" --hold   # park it for approval
+reins watch                                 # every agent, and everything waiting on you
 ```
 
-The agent reads it at its next tool call. Run `reins doctor` to check the setup: it reports the hooks, the Claude Code version, and whether a hook has run since the settings changed.
+Run `reins doctor` to check the setup: it reports the hooks, the Claude Code version, and whether a hook has run since the settings changed.
 
 ---
 
 ## What it does
 
-### Steer
-
-`reins steer "<message>"` queues a note for the next tool call. Two steers before that call both arrive. If the agent is already finishing and there is no next tool call, the Stop hook delivers the note, so a queued steer is not lost.
-
-Treat a steer as the detail you forgot to put in the prompt. A steer that contradicts the prompt is weighed down by the model. For a hard "never do X", use a guard.
-
-With several agents in one repo, `reins steer` asks which one you mean, or takes `--session <name>`.
-
-<p align="center">
-  <img src="assets/steer-picker.svg" alt="reins steer with several live sessions: a picker lists each agent by name with its status and last tool call, and asks where the steer should land" width="820">
-</p>
-
-Details and caveats: [docs/steering.md](docs/steering.md).
-
-### Guard
-
-A guard matches a Bash command, a file path or a tool name before the call runs. It has three hardnesses:
-
-```bash
-reins guard add bash "psql.*production"       # deny: the call does not run
-reins guard add bash "git push" --ask         # ask: Claude Code shows you its permission prompt
-reins guard add bash "npm publish" --hold     # hold: park it for your later approval
-reins guard add path "infra/**"               # block writes to paths
-reins guard add tool "mcp__stripe__*" --ask   # match MCP tools by name
-reins guard list
-```
-
-A deny holds under `--permission-mode bypassPermissions`. reins ships a default denylist: recursive `rm` outside build and scratch directories, force pushes, `git reset --hard`, `DROP`/`TRUNCATE`, `curl … | sh`, and writes to `.env*` and `.git/**`. `reins scan` proposes rules from your repo's own manifests, and `reins policy upgrade` refreshes shipped rules while keeping yours.
-
-<p align="center">
-  <img src="assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
-</p>
-
-Details, the measured false-positive rate, and `reins audit --guards`: [docs/guards.md](docs/guards.md).
-
 ### Hold: approval for the run nobody is watching
 
-`--ask` needs you at the terminal. A hold rule parks the proposed action in a queue and lets the agent carry on with other work. The action does not run until you approve it.
+A hold rule parks the proposed action in a queue and lets the agent carry on with other work. The action does not run until you approve it.
 
 ```bash
+reins guard add bash "git push" --hold        # hold any push for approval
+
 reins pending                                 # what did the agents want to do?
 #   ab12cd34  7h  3b9f2a1c  Bash  git push origin main  [bash-git-push]
 
@@ -166,6 +138,54 @@ One screen shows every agent in the repo and everything waiting on you. From it 
 - Nothing listens on a port. `reins watch --once` prints a plain snapshot for scripts.
 
 Keys, layout and caveats: [docs/watch.md](docs/watch.md).
+
+### Guard
+
+A guard matches a Bash command, a file path or a tool name before the call runs. Besides hold, it can deny the call outright or ask you at the prompt:
+
+```bash
+reins guard add bash "psql.*production"       # deny: the call does not run
+reins guard add bash "git push" --ask         # ask: Claude Code shows you its permission prompt
+reins guard add bash "npm publish" --hold     # hold: park it for your later approval
+reins guard add path "infra/**"               # block writes to paths
+reins guard add tool "mcp__stripe__*" --ask   # match MCP tools by name
+reins guard list
+```
+
+A deny holds under `--permission-mode bypassPermissions`. reins ships a default denylist: recursive `rm` outside build and scratch directories, force pushes, `git reset --hard`, `DROP`/`TRUNCATE`, `curl … | sh`, and writes to `.env*` and `.git/**`. `reins scan` proposes rules from your repo's own manifests, and `reins policy upgrade` refreshes shipped rules while keeping yours.
+
+<p align="center">
+  <img src="assets/guard-list.svg" alt="reins guard list output: the default denylist plus a hold rule, each with its hardness (deny/ask/hold), pattern, and reason" width="820">
+</p>
+
+Details, the measured false-positive rate, and `reins audit --guards`: [docs/guards.md](docs/guards.md).
+
+### Steer
+
+`reins steer "<message>"` queues a note for the next tool call. Two steers before that call both arrive. If the agent is already finishing and there is no next tool call, the Stop hook delivers the note, so a queued steer is not lost.
+
+```text
+# terminal 1: the agent is mid-task and drifting
+  ⏺ Edit(src/login/flow.ts)
+
+# terminal 2: you, without ending the run
+  $ reins steer "focus on the token refresh path, leave the login flow alone"
+  ✓ queued — lands at the agent's next tool call
+
+# terminal 1: next tool call, same run, context intact
+  ⏺ [reins — live steering from the developer] folded in
+  ⏺ Edit(src/auth/refresh.ts)
+```
+
+Treat a steer as the detail you forgot to put in the prompt. A steer that contradicts the prompt is weighed down by the model. For a hard "never do X", use a guard.
+
+With several agents in one repo, `reins steer` asks which one you mean, or takes `--session <name>`.
+
+<p align="center">
+  <img src="assets/steer-picker.svg" alt="reins steer with several live sessions: a picker lists each agent by name with its status and last tool call, and asks where the steer should land" width="820">
+</p>
+
+Details and caveats: [docs/steering.md](docs/steering.md).
 
 ### Loop alarm
 

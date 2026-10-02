@@ -143,8 +143,9 @@ async function runHook(rest: string[]): Promise<number> {
 }
 
 function printHelp(): void {
-  console.log(`reins — steer a running Claude Code agent, block forbidden actions,
-catch loops, and capture every run. Local-first. No daemon, no backend.
+  console.log(`reins — keep control of Claude Code agents you aren't watching: hold risky
+actions for approval, block forbidden ones, watch every agent, nudge one
+mid-run, and capture every run. Local-first. No daemon, no backend.
 
 USAGE
   reins init                       Set up .reins/ and wire hooks into settings
