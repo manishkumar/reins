@@ -80,6 +80,13 @@ All notable changes to `reins` are documented here. Format loosely follows
 
 ### Changed
 
+- **The README is a short front door, and the detail lives in `docs/`.** Each
+  feature's full text and caveats moved, unchanged, to its own page:
+  `docs/steering.md`, `guards.md`, `holds.md`, `watch.md`, `claim-check.md`,
+  `capture.md`, `mods.md`, `compatibility.md` and `how-it-works.md`. The README
+  keeps a one-line version of the limits that decide whether reins fits, under
+  "Before you rely on it". The cockpit screenshots are regenerated from a
+  scripted scenario (`assets/cockpit-demo-frame.cjs`).
 - `reins watch` reads "looping" as a consecutive streak of identical calls,
   matching the loop alarm. It used to count repeats anywhere in the session.
 - Steering typed into `reins watch` appends to the queue, like `reins steer`.

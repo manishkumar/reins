@@ -4,9 +4,10 @@ reins is a kit of Claude Code hooks that lets a human steer a *running* agent: s
 nudges (`steer`), hard vetoes (`guard`), an approval queue (`hold`), a loop alarm, and
 SQLite capture of every run. Local-first: no daemon, no backend, no accounts.
 
-Read the README before changing behavior — its "honest caveats" sections are spec, not
-marketing copy. If you change what a feature can or can't do, update its caveat in the
-same commit.
+Read the README and the feature's page under `docs/` before changing behavior. The
+"honest caveats" sections in `docs/` and the README's "Before you rely on it" list are
+spec, not marketing copy. If you change what a feature can or can't do, update its
+caveat in `docs/` in the same commit, and the README's one-line version if it has one.
 
 ## Commands
 

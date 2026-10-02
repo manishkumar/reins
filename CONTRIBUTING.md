@@ -32,7 +32,7 @@ automatically — no need to re-link).
   boxes), `model.ts` (one frame of data), `render.ts` (a pure function from
   model + UI state to screen lines). Keep rendering pure so it stays testable
   without a terminal; `src/commands/watch.ts` is the only part that touches it.
-  To refresh the README screenshots: `node assets/watch-frame.cjs` piped
+  To refresh the README screenshots: `node assets/cockpit-demo-frame.cjs` piped
   through `assets/ansi2svg.mjs` (usage in the script header).
 - `test/` — `node:test` unit tests over the pure logic.
 
