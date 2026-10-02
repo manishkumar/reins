@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   total_tokens INTEGER,
   total_cost REAL,
   final_outcome TEXT,
-  name TEXT
+  name TEXT,
+  transcript TEXT
 );
 CREATE TABLE IF NOT EXISTS tool_calls (
   session_id TEXT,
@@ -89,6 +90,11 @@ export function openDb(payloadCwd?: string): SqlDb | null {
   } catch {
     /* naming unavailable on this db — display falls back to mnemonics */
   }
+  try {
+    ensureSessionTranscriptColumn(db);
+  } catch {
+    /* no transcript path on this db — the cockpit shows names without titles */
+  }
   _db = db;
   return db;
 }
@@ -109,6 +115,24 @@ export function hasSessionNameColumn(db: SqlDb): boolean {
 export function ensureSessionNameColumn(db: SqlDb): void {
   if (hasSessionNameColumn(db)) return;
   withRetry(() => db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT`));
+}
+
+/** True if this runs.db has the sessions.transcript column (added in 0.5.x). */
+export function hasSessionTranscriptColumn(db: SqlDb): boolean {
+  try {
+    const row = db
+      .prepare(`SELECT COUNT(*) AS c FROM pragma_table_info('sessions') WHERE name = 'transcript'`)
+      .get() as { c: number } | undefined;
+    return (row?.c ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Add sessions.transcript to an older runs.db. Idempotent. */
+export function ensureSessionTranscriptColumn(db: SqlDb): void {
+  if (hasSessionTranscriptColumn(db)) return;
+  withRetry(() => db.exec(`ALTER TABLE sessions ADD COLUMN transcript TEXT`));
 }
 
 /** Set (or with null, clear) a session's custom display name. */
@@ -256,6 +280,7 @@ export function upsertSessionStart(
   sessionId: string,
   repo: string,
   startedIso: string,
+  transcriptPath?: string,
 ): void {
   withRetry(() =>
     db
@@ -265,6 +290,29 @@ export function upsertSessionStart(
       )
       .run(sessionId, repo, startedIso),
   );
+  if (!transcriptPath) return;
+  // Display context only (the cockpit reads the session's title from it). Its
+  // own statement and its own try: a db without the column still records the
+  // session.
+  try {
+    withRetry(() =>
+      db
+        .prepare(`UPDATE sessions SET transcript = ? WHERE id = ? AND transcript IS NOT ?`)
+        .run(transcriptPath, sessionId, transcriptPath),
+    );
+  } catch {
+    /* older runs.db without the column */
+  }
+}
+
+/** The calls a claim check or footprint reads, oldest first. Read-only. */
+export function listSessionCalls(
+  db: SqlDb,
+  sessionId: string,
+): Array<{ tool: string; summary: string; ok: number | null; ts: string }> {
+  return db
+    .prepare(`SELECT tool, input_summary AS summary, ok, ts FROM tool_calls WHERE session_id = ? ORDER BY seq ASC`)
+    .all(sessionId) as Array<{ tool: string; summary: string; ok: number | null; ts: string }>;
 }
 
 export interface ToolCallRow {

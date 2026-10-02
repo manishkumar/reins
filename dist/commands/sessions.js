@@ -4,7 +4,7 @@ exports.cmdSessions = cmdSessions;
 const db_1 = require("../db");
 const store_1 = require("../store");
 const holds_1 = require("../holds");
-const names_1 = require("../names");
+const sessionFace_1 = require("../sessionFace");
 const format_1 = require("./format");
 /** List recent sessions in this project — useful when several agents have run. */
 function cmdSessions(args) {
@@ -15,8 +15,9 @@ function cmdSessions(args) {
         return 0;
     }
     const hasName = (0, db_1.hasSessionNameColumn)(db);
+    const hasTranscript = (0, db_1.hasSessionTranscriptColumn)(db);
     const rows = db
-        .prepare(`SELECT s.id, ${hasName ? "s.name, " : ""}s.started, s.ended, s.final_outcome,
+        .prepare(`SELECT s.id, ${hasName ? "s.name, " : ""}${hasTranscript ? "s.transcript, " : ""}s.started, s.ended, s.final_outcome,
               COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
          FROM sessions s
          LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -48,10 +49,14 @@ function cmdSessions(args) {
         const when = (r.last_ts || r.started || "").replace("T", " ").replace(/\..*/, "");
         const holds = holdCounts.get(r.id);
         const holdChip = holds ? format_1.c.cyan(`  ⏳ ${holds} awaiting approval`) : "";
-        // Name first — it's what humans scan by; the short id stays for copying
-        // into lastrun/steer (both also accept the name).
-        const name = pad((0, names_1.displayName)(r.id, r.name), 16);
-        console.log(`  ${format_1.c.cyan(name)} ${format_1.c.dim(shortId(r.id))}  ${status.padEnd(20)} ${format_1.c.dim(`${r.calls} calls`)}  ${format_1.c.dim(when)}${holdChip}`);
+        // What the session is about leads: it's what humans scan by. The name
+        // and short id that lastrun/steer accept follow on the line below.
+        const face = (0, sessionFace_1.sessionFace)(r.id, r.name, r.transcript);
+        const head = pad(clip((0, sessionFace_1.headOf)(face, r.id), 34), 34);
+        console.log(`  ${format_1.c.cyan(head)}  ${status.padEnd(20)} ${format_1.c.dim(`${r.calls} calls`)}  ${format_1.c.dim(when)}${holdChip}`);
+        const about = (0, sessionFace_1.aboutOf)(face, r.id);
+        if (about)
+            console.log(`    ${format_1.c.dim(about)}`);
     }
     console.log("");
     console.log(format_1.c.dim("Full trajectory of one:  reins lastrun <session-id>"));
@@ -60,10 +65,8 @@ function cmdSessions(args) {
         console.log(format_1.c.dim("Review parked actions:   reins pending"));
     return 0;
 }
-function shortId(id) {
-    // First 8 chars are plenty unique within a project and copy cleanly into
-    // `reins lastrun <prefix>` (which matches on prefix).
-    return id.length > 8 ? id.slice(0, 8) : id;
+function clip(s, width) {
+    return s.length > width ? s.slice(0, width - 1) + "…" : s;
 }
 /** Pad the PLAIN string before coloring (color codes have zero display width). */
 function pad(s, width) {

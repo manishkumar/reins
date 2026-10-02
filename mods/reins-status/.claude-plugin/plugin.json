@@ -1,0 +1,7 @@
+{
+  "name": "reins-status",
+  "version": "0.1.0",
+  "description": "Read-only view of the reins hold queue inside Claude Code: a status line count and a band above the prompt. It shows the queue and never answers it.",
+  "author": { "name": "Manish Kumar" },
+  "types": "./types/index.d.ts"
+}

@@ -1,3 +1,6 @@
+import { SETTINGS_BLOCK } from "../settingsBlock";
+import { claudeSightings, claudeCodeVersion, predatesFailureHook, FAILURE_HOOK, FAILURE_HOOK_SINCE } from "../claudeVersion";
+import { readHooksSeen } from "../heartbeat";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { reinsDir, steeringPath } from "../paths";
@@ -122,12 +125,56 @@ export function cmdDoctor(): number {
   // Hook wiring
   console.log("");
   console.log(c.bold("Hook wiring (.claude)"));
-  const wiredAnywhere =
-    checkSettings(path.join(process.cwd(), ".claude", "settings.json"), "settings.json", line) ||
-    checkSettings(path.join(process.cwd(), ".claude", "settings.local.json"), "settings.local.json", line);
-  if (!wiredAnywhere) {
+  const seen = readHooksSeen(reinsDir());
+  const sightings = claudeSightings(seen?.claude);
+  const claude = claudeCodeVersion(seen?.claude);
+  const old = predatesFailureHook(claude);
+  const unknown = claude === null;
+  if (unknown) {
+    notes++;
+    line(WARN, "Claude Code", `version unknown (claude is not on PATH and no hook has reported one). A version older than ${FAILURE_HOOK_SINCE} loads no hooks from a file that names ${FAILURE_HOOK}`);
+  } else {
+    const where = sightings.map((s) => `${s.version} from ${s.from}`).join(", ");
+    line(OK, "Claude Code", old ? `${where}. Older than ${FAILURE_HOOK_SINCE}: no ${FAILURE_HOOK} event, so failed tool calls are not captured` : where);
+  }
+  const settingsFiles = [
+    path.join(process.cwd(), ".claude", "settings.json"),
+    path.join(process.cwd(), ".claude", "settings.local.json"),
+  ];
+  const wiring = [
+    checkSettings(settingsFiles[0], "settings.json", line, old, unknown),
+    checkSettings(settingsFiles[1], "settings.local.json", line, old, unknown),
+  ];
+  // The fact behind every version check above: has a hook run since the file changed?
+  if (wiring.some((w) => w !== "none")) {
+    const changed = Math.max(...settingsFiles.map((f) => (fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0)));
+    const ran = Object.entries(seen?.events ?? {}).filter(([, ts]) => Date.parse(ts) > changed).map(([ev]) => ev);
+    if (ran.length > 0) {
+      line(OK, "seen running", `${ran.sort().join(", ")} ran after the settings file last changed, so Claude Code loads it`);
+    } else {
+      const named = settingsFiles.some((f) => namesFailureHook(f));
+      const how = "make one tool call in a Claude Code session here, then run reins doctor again";
+      if (unknown && named) {
+        problems++;
+        line(BAD, "seen running", `no hook has run since the settings file last changed, it names ${FAILURE_HOOK}, and the Claude Code version is unknown. Until one runs, assume no guard is active: ${how}`);
+      } else {
+        notes++;
+        line(WARN, "seen running", `no hook has run since the settings file last changed: ${how}`);
+      }
+    }
+  }
+  if (wiring.includes("dead")) {
     problems++;
-    line(WARN, "hooks", "not wired — run `reins init` (or `reins init --print`)");
+    line(BAD, "hooks", `this Claude Code loads NO hooks from a file that names ${FAILURE_HOOK}: no guard, hold or steer runs. Run \`reins init\` to take it out, or upgrade Claude Code`);
+  } else if (!wiring.includes("full")) {
+    problems++;
+    line(
+      WARN,
+      "hooks",
+      wiring.includes("partial")
+        ? "partly wired — run `reins init` to add the missing ones (it merges, and keeps what is there)"
+        : "not wired — run `reins init` (or `reins init --print`)",
+    );
   }
 
   // PATH
@@ -154,24 +201,48 @@ function checkSettings(
   file: string,
   label: string,
   line: (sym: string, label: string, detail: string) => void,
-): boolean {
-  if (!fs.existsSync(file)) return false;
+  old: boolean,
+  /** Version unknown: `reins init` leaves the failure hook out on purpose, so its absence is not "partly wired". */
+  unknown = false,
+): "full" | "partial" | "none" | "dead" {
+  if (!fs.existsSync(file)) return "none";
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(fs.readFileSync(file, "utf8") || "{}");
   } catch {
     line(BAD, label, "exists but is not valid JSON");
-    return false;
+    return "none";
   }
   const hooks = (parsed.hooks ?? {}) as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
-  const events = ["PreToolUse", "PostToolUse", "Stop"];
+  // An event this Claude Code does not know, from reins or anyone else.
+  if (old && FAILURE_HOOK in hooks) {
+    line(BAD, label, `names ${FAILURE_HOOK}, which this Claude Code does not know`);
+    return "dead";
+  }
+  const optional = (ev: string) => ev === FAILURE_HOOK && (old || (unknown && !(FAILURE_HOOK in hooks)));
+  const events = Object.keys(SETTINGS_BLOCK.hooks).filter((ev) => !optional(ev));
   const wired = events.filter((ev) =>
     (hooks[ev] ?? []).some((e) => (e.hooks ?? []).some((h) => (h.command ?? "").includes("reins hook"))),
   );
-  if (wired.length === 0) return false;
-  const sym = wired.length === events.length ? OK : WARN;
-  line(sym, label, `${wired.join(", ")} wired`);
-  return wired.length === events.length;
+  if (wired.length === 0) return "none";
+  const missing = events.filter((ev) => !wired.includes(ev));
+  if (missing.length === 0) {
+    line(OK, label, `${wired.join(", ")} wired`);
+    return "full";
+  }
+  // An install from before a hook existed. The usual one is PostToolUseFailure:
+  // without it, failed commands are not captured and never trip the loop alarm.
+  line(WARN, label, `${wired.join(", ")} wired; missing ${missing.join(", ")}`);
+  return "partial";
+}
+
+function namesFailureHook(file: string): boolean {
+  try {
+    const hooks = JSON.parse(fs.readFileSync(file, "utf8") || "{}").hooks;
+    return !!hooks && typeof hooks === "object" && FAILURE_HOOK in hooks;
+  } catch {
+    return false;
+  }
 }
 
 /**

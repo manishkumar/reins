@@ -19,6 +19,15 @@ exports.SETTINGS_BLOCK = {
                 hooks: [{ type: "command", command: "reins hook post-tool" }],
             },
         ],
+        // Claude Code sends a tool call that FAILED here and not to PostToolUse.
+        // Without this entry a failing command is never captured: no failed test
+        // run in the trajectory, and no loop alarm for a command failing on repeat.
+        PostToolUseFailure: [
+            {
+                matcher: "*",
+                hooks: [{ type: "command", command: "reins hook post-tool-failure" }],
+            },
+        ],
         Stop: [
             {
                 hooks: [{ type: "command", command: "reins hook stop" }],
@@ -26,6 +35,8 @@ exports.SETTINGS_BLOCK = {
         ],
     },
 };
-function settingsBlockJson() {
-    return JSON.stringify(exports.SETTINGS_BLOCK, null, 2);
+/** The block as text. `without` names events to leave out (see src/claudeVersion.ts). */
+function settingsBlockJson(without = []) {
+    const hooks = Object.fromEntries(Object.entries(exports.SETTINGS_BLOCK.hooks).filter(([event]) => !without.includes(event)));
+    return JSON.stringify({ hooks }, null, 2);
 }

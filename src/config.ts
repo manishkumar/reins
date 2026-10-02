@@ -13,11 +13,16 @@ export interface ReinsConfig {
    *            afterwards as a HOLD BREACH).
    *  "defer" — always defer, skipping the environment check. */
   holdTransport: "auto" | "defer" | "deny";
+  /** Say at Stop when a turn's edits were left failing, untested or unverified
+   *  (see src/claim.ts). False silences that line; the cockpit, lastrun and
+   *  the report still show the verdict. */
+  claimCheck: boolean;
 }
 
 const DEFAULTS: ReinsConfig = {
   loopThreshold: 3,
   holdTransport: "deny",
+  claimCheck: true,
 };
 
 export function loadConfig(payloadCwd?: string): ReinsConfig {

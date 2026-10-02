@@ -7,6 +7,11 @@ const format_1 = require("./format");
 const util_1 = require("../util");
 const config_1 = require("../config");
 const holds_1 = require("../holds");
+const sessionFace_1 = require("../sessionFace");
+const claim_1 = require("../claim");
+const footprint_1 = require("../footprint");
+const paths_1 = require("../paths");
+const holds_2 = require("../holds");
 function cmdLastrun(args) {
     const db = (0, db_1.openDbReadOnly)();
     if (!db) {
@@ -37,11 +42,13 @@ function cmdLastrun(args) {
         .prepare(`SELECT seq, tool, input_summary, input_hash, ok, ts FROM tool_calls WHERE session_id = ? ORDER BY seq ASC`)
         .all(session.id);
     const threshold = (0, config_1.loadConfig)().loopThreshold;
-    printHeader(session, calls.length);
+    printHeader(session, calls.length, (0, sessionFace_1.faceReader)(db)(session.id));
     console.log("");
     printTrajectory(calls, threshold);
     console.log("");
     printSummary(calls, threshold);
+    printClaim(calls);
+    printFootprint(calls);
     printDecisions(db, session.id);
     printAwaiting(session.id);
     return 0;
@@ -99,10 +106,36 @@ function printAwaiting(sessionId) {
         console.log(`    ${format_1.c.cyan(p.id)}  ${p.tool}  ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}`);
     }
 }
-function printHeader(s, callCount) {
+/** What the session's own calls say about its work being done (src/claim.ts). */
+function printClaim(calls) {
+    const claim = (0, claim_1.checkClaim)(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })));
+    if (claim.verdict === "none")
+        return;
+    const tone = claim.verdict === "failed" ? format_1.c.red : claim.verdict === "verified" ? format_1.c.green : claim.verdict === "unknown" ? format_1.c.dim : format_1.c.yellow;
+    console.log("");
+    console.log(format_1.c.bold("Claim check") + format_1.c.dim("  (from this session's own calls; reports, never blocks)"));
+    console.log(`  ${tone(claim.text)}`);
+    if (claim.command)
+        console.log(`  ${format_1.c.dim((0, util_1.truncate)(claim.command, 110))}`);
+}
+/** What the session edited and ran, to read beside what it was asked (src/footprint.ts). */
+function printFootprint(calls) {
+    const lines = (0, footprint_1.footprintLines)((0, footprint_1.footprint)(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })), (0, holds_2.proposalWorkdir)((0, paths_1.resolveProjectDir)())));
+    if (!lines.length)
+        return;
+    console.log("");
+    console.log(format_1.c.bold("Footprint") + format_1.c.dim("  (facts from the captured calls; whether it matches the ask is yours to judge)"));
+    for (const l of lines)
+        console.log(l.startsWith("  ") ? format_1.c.dim("  " + l) : "  " + l);
+}
+function printHeader(s, callCount, face) {
     const dur = duration(s.started, s.ended);
-    console.log(format_1.c.bold("reins · last run"));
-    console.log(`  ${format_1.c.dim("session")}  ${s.id}`);
+    console.log(format_1.c.bold("reins · last run") + (face.label === face.name ? "" : "  " + format_1.c.cyan(face.label)));
+    console.log(`  ${format_1.c.dim("session")}  ${face.name} ${format_1.c.dim("·")} ${s.id}`);
+    if (face.branch)
+        console.log(`  ${format_1.c.dim("branch")}   ${face.branch}`);
+    if (face.asked)
+        console.log(`  ${format_1.c.dim("asked")}    ${(0, util_1.truncate)(face.asked, 160)}`);
     if (s.repo)
         console.log(`  ${format_1.c.dim("repo")}     ${s.repo}`);
     console.log(`  ${format_1.c.dim("when")}     ${s.started ?? "?"}${dur ? format_1.c.dim(`  (${dur})`) : ""}`);

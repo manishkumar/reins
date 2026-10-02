@@ -7,7 +7,8 @@ import {
   pendingTargetedSessions,
 } from "../steering";
 import { openDbReadOnly, matchSessions, recentActiveSessions, ActiveSessionRow } from "../db";
-import { displayName, mnemonic } from "../names";
+import { mnemonic } from "../names";
+import { aboutOf, faceReader, headOf, sessionFace, type SessionFace } from "../sessionFace";
 import { c } from "./format";
 
 /**
@@ -87,10 +88,12 @@ export async function cmdSteer(args: string[]): Promise<number> {
  */
 async function pickSession(): Promise<string | undefined | "cancelled"> {
   let rows: ActiveSessionRow[] = [];
+  let faceOf = faceReader(null);
   try {
     const db = openDbReadOnly();
     if (!db) return undefined; // no capture — nothing to list, broadcast as ever
     rows = recentActiveSessions(db, Date.now(), PICKER_WINDOW_MS);
+    faceOf = faceReader(db);
   } catch {
     return undefined; // a flaky DB must never block a steer
   }
@@ -98,7 +101,7 @@ async function pickSession(): Promise<string | undefined | "cancelled"> {
 
   const nowMs = Date.now();
   console.log(c.bold("Several sessions are live — where should this steer land?"));
-  rows.forEach((r, i) => console.log(formatPickerRow(r, i, nowMs)));
+  rows.forEach((r, i) => console.log(formatPickerRow(r, i, nowMs, faceOf(r.id))));
   console.log(
     "  " + c.cyan("a") + c.dim(". all — broadcast; whichever session moves next consumes it"),
   );
@@ -131,9 +134,14 @@ export function parsePickerChoice(answer: string, count: number): PickerChoice {
   return { kind: "invalid" };
 }
 
-/** One numbered picker row: name, id, liveness, and the last call as context. */
-export function formatPickerRow(r: ActiveSessionRow, index: number, nowMs: number): string {
-  const name = displayName(r.id, r.name);
+/**
+ * One numbered picker row: what the session is about, liveness, and the last
+ * call; then the name and id that address it, its branch and last prompt.
+ */
+export function formatPickerRow(r: ActiveSessionRow, index: number, nowMs: number, face?: SessionFace): string {
+  const f = face ?? sessionFace(r.id, r.name);
+  const head = headOf(f, r.id);
+  const about = aboutOf(f, r.id);
   const age = r.lastTsMs != null ? nowMs - r.lastTsMs : null;
   const live = age != null && age < ACTIVE_MS;
   const status = live ? c.yellow("● active") : c.dim(`○ idle ${age != null ? formatAge(age) : "?"}`);
@@ -144,8 +152,8 @@ export function formatPickerRow(r: ActiveSessionRow, index: number, nowMs: numbe
       : "";
   const steer = peekQueued(r.id) ? "  " + c.magenta("✎ steer queued") : "";
   return (
-    `  ${c.cyan(String(index + 1))}. ${c.bold(pad(name, 16))} ${c.dim(short(r.id))}  ` +
-    `${status}  ${meta}${last}${steer}`
+    `  ${c.cyan(String(index + 1))}. ${c.bold(pad(head, 24))}  ${status}  ${meta}${last}${steer}` +
+    (about ? `\n     ${c.dim(about)}` : "")
   );
 }
 

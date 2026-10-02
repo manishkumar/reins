@@ -41,8 +41,10 @@ exports.globToRegExp = globToRegExp;
 exports.matchesPathGlob = matchesPathGlob;
 exports.isExpired = isExpired;
 exports.stripQuoted = stripQuoted;
+exports.dropHeredocData = dropHeredocData;
 exports.splitCommandSegments = splitCommandSegments;
 exports.tokenizeArgs = tokenizeArgs;
+exports.firingSegment = firingSegment;
 exports.checkGuards = checkGuards;
 exports.validateRules = validateRules;
 const fs = __importStar(require("node:fs"));
@@ -315,6 +317,98 @@ function stripQuoted(cmd) {
         .replace(/"(?:[^"\\]|\\.)*"/g, " ")
         .replace(/'[^']*'/g, " ");
 }
+/** The quote still open after reading `text`, starting from `open`. */
+function quoteAfter(text, open) {
+    let quote = open;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (quote) {
+            if (ch === "\\" && quote === '"')
+                i++;
+            else if (ch === quote)
+                quote = null;
+        }
+        else if (ch === "\\")
+            i++;
+        else if (ch === '"' || ch === "'")
+            quote = ch;
+    }
+    return quote;
+}
+/** Commands that read a heredoc as text or as a program in another language, never as shell. */
+const HEREDOC_DATA_READERS = /^(cat|tee|python[\d.]*|node|ruby|perl)$/;
+/**
+ * Remove heredoc bodies that are data, so a rule does not fire on text the
+ * shell never runs: `python3 - <<'EOF' … s = "git push" … EOF` proposes a
+ * Python program, not a push.
+ *
+ * A body is dropped only when every one of these holds. Anything else is left
+ * in and matched as before, so a doubt makes the guard fire more, never less:
+ *   - the command the heredoc feeds is a known reader (`cat`, `tee`, `python`,
+ *     `node`, `ruby`, `perl`). Not a shell (`bash <<EOF` runs its body), not a
+ *     database client (`psql <<EOF` runs SQL a rule may name), not anything
+ *     unrecognised;
+ *   - the opening line has no pipe, command substitution or second heredoc,
+ *     because `cat <<EOF | sh` and `sh -c "$(cat <<EOF` run the body;
+ *   - with an unquoted delimiter the shell expands the body, so it must hold
+ *     no `$(` and no backtick;
+ *   - the `<<` stands outside quotes and outside a comment, where the shell
+ *     reads it as a heredoc at all;
+ *   - the closing delimiter is found. Without one this is not a heredoc.
+ *
+ * Text on the opening line itself (`cat <<EOF > f && git push`) is never
+ * dropped. Lines are removed whole, so every remaining segment is still a
+ * substring of the original command.
+ */
+function dropHeredocData(cmd) {
+    if (!cmd.includes("<<"))
+        return cmd;
+    const lines = cmd.split("\n");
+    const kept = [];
+    // A quote left open by an earlier line: this line starts inside a string.
+    let open = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        kept.push(line);
+        const startsQuoted = open !== null;
+        open = quoteAfter(line, open);
+        if (startsQuoted)
+            continue;
+        const m = /(?<![<\\])<<(-?)[ \t]*(?:'(\w+)'|"(\w+)"|(\w+))/.exec(line);
+        if (!m)
+            continue;
+        const before = line.slice(0, m.index);
+        const rest = before + " " + line.slice(m.index + m[0].length);
+        // The `<<` must stand outside quotes and comments, and the line must not
+        // hand the body to something that runs it.
+        if (quoteAfter(before, null) !== null || quoteAfter(line, null) !== null)
+            continue;
+        if (/(^|\s)#/.test(stripQuoted(before)))
+            continue;
+        if (/[|`]|\$\(|<\(|<</.test(stripQuoted(rest)))
+            continue;
+        const feeds = splitCommandSegments(before).pop() ?? "";
+        const head = tokenizeArgs(feeds).find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
+        if (!HEREDOC_DATA_READERS.test(head.split("/").pop() ?? ""))
+            continue;
+        const delim = m[2] ?? m[3] ?? m[4];
+        const quoted = m[4] === undefined;
+        let end = -1;
+        for (let j = i + 1; j < lines.length; j++) {
+            const candidate = m[1] ? lines[j].replace(/^\t+/, "") : lines[j];
+            if (candidate === delim) {
+                end = j;
+                break;
+            }
+        }
+        if (end < 0)
+            continue;
+        if (!quoted && /\$\(|`/.test(lines.slice(i + 1, end).join("\n")))
+            continue;
+        i = end; // body and closing delimiter are data
+    }
+    return kept.join("\n");
+}
 /**
  * Split a shell command into independently-executed segments on `;`, `&&`,
  * `||`, `|` and newlines.
@@ -481,6 +575,54 @@ function segmentConfinedTo(args, cwd) {
     }
     return true;
 }
+/**
+ * The segment of `command` a bash rule fires on, or null when it does not fire.
+ * `checkGuards` decides with this, and `reins watch` shows an approver the same
+ * segment, so what is displayed as the reason is what the guard matched.
+ */
+function firingSegment(rule, command, cwd) {
+    let re;
+    try {
+        re = new RegExp(rule.pattern, "i");
+    }
+    catch {
+        return null; // skip malformed user regex rather than crash the guard
+    }
+    const exempt = compileExcept(rule, (p) => new RegExp(p, "i"));
+    // A `cd` anywhere in the command means the hook's cwd is no longer where
+    // a later relative argument actually points (`cd / && rm -rf home`), so
+    // relative resolution is dropped for the whole command rather than
+    // guessed at. Dropping it can only make the guard fire more.
+    const relBase = cwd && !/(?:^|[\s;&|(])cd\s/.test(command) ? cwd : undefined;
+    // Evaluate segment by segment so an exemption can clear ONE command
+    // without clearing its neighbours. With no `except` the behaviour is
+    // identical to matching the whole command: a pattern that matched the
+    // full string matches the segment it lives in.
+    for (const segment of splitCommandSegments(dropHeredocData(command))) {
+        const stripped = stripQuoted(segment);
+        if (!re.test(stripped))
+            continue;
+        // Exemptions are matched per ARGUMENT (see tokenizeArgs), so an
+        // exemption clears a rule only when some argument really is the
+        // exempted thing — not merely when the word appears somewhere in the
+        // command text. Bounded further by rm-catastrophic carrying no
+        // exemptions at all: nothing can wave through `rm -rf /`.
+        if (exempt.length > 0) {
+            const args = tokenizeArgs(segment);
+            // An argument that IS the exempted thing, as written.
+            if (args.some((arg) => exempt.some((ex) => ex.test(arg))))
+                continue;
+            // Or: the session is sitting in exempted space and this segment never
+            // reaches outside it, which is how the same deletion looks when the
+            // agent has already cd'd there (`rm -rf home` in a scratchpad).
+            if (relBase && exempt.some((ex) => ex.test(relBase)) && segmentConfinedTo(args, relBase)) {
+                continue;
+            }
+        }
+        return segment;
+    }
+    return null;
+}
 /** Returns the first matching guard rule for a tool call, or null.
  *
  *  `cwd` is the session's working directory (Claude Code sends it on every hook
@@ -498,46 +640,8 @@ function checkGuards(guards, toolName, toolInput, cwd) {
             const command = typeof input.command === "string" ? input.command : "";
             if (!command)
                 continue;
-            let re;
-            try {
-                re = new RegExp(rule.pattern, "i");
-            }
-            catch {
-                continue; // skip malformed user regex rather than crash the guard
-            }
-            const exempt = compileExcept(rule, (p) => new RegExp(p, "i"));
-            // A `cd` anywhere in the command means the hook's cwd is no longer where
-            // a later relative argument actually points (`cd / && rm -rf home`), so
-            // relative resolution is dropped for the whole command rather than
-            // guessed at. Dropping it can only make the guard fire more.
-            const relBase = cwd && !/(?:^|[\s;&|(])cd\s/.test(command) ? cwd : undefined;
-            // Evaluate segment by segment so an exemption can clear ONE command
-            // without clearing its neighbours. With no `except` the behaviour is
-            // identical to matching the whole command: a pattern that matched the
-            // full string matches the segment it lives in.
-            for (const segment of splitCommandSegments(command)) {
-                const stripped = stripQuoted(segment);
-                if (!re.test(stripped))
-                    continue;
-                // Exemptions are matched per ARGUMENT (see tokenizeArgs), so an
-                // exemption clears a rule only when some argument really is the
-                // exempted thing — not merely when the word appears somewhere in the
-                // command text. Bounded further by rm-catastrophic carrying no
-                // exemptions at all: nothing can wave through `rm -rf /`.
-                if (exempt.length > 0) {
-                    const args = tokenizeArgs(segment);
-                    // An argument that IS the exempted thing, as written.
-                    if (args.some((arg) => exempt.some((ex) => ex.test(arg))))
-                        continue;
-                    // Or: the session is sitting in exempted space and this segment never
-                    // reaches outside it, which is how the same deletion looks when the
-                    // agent has already cd'd there (`rm -rf home` in a scratchpad).
-                    if (relBase && exempt.some((ex) => ex.test(relBase)) && segmentConfinedTo(args, relBase)) {
-                        continue;
-                    }
-                }
+            if (firingSegment(rule, command, cwd) !== null)
                 return { rule };
-            }
         }
         else if (rule.type === "path") {
             const paths = pathsFromInput(input);

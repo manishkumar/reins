@@ -1,12 +1,13 @@
-import { openDbReadOnly, hasSessionNameColumn } from "../db";
+import { openDbReadOnly, hasSessionNameColumn, hasSessionTranscriptColumn } from "../db";
 import { capabilityNote } from "../store";
 import { listPending } from "../holds";
-import { displayName } from "../names";
+import { aboutOf, headOf, sessionFace, shortId } from "../sessionFace";
 import { c } from "./format";
 
 interface Row {
   id: string;
   name?: string | null;
+  transcript?: string | null;
   started: string | null;
   ended: string | null;
   final_outcome: string | null;
@@ -24,9 +25,10 @@ export function cmdSessions(args: string[]): number {
   }
 
   const hasName = hasSessionNameColumn(db);
+  const hasTranscript = hasSessionTranscriptColumn(db);
   const rows = db
     .prepare(
-      `SELECT s.id, ${hasName ? "s.name, " : ""}s.started, s.ended, s.final_outcome,
+      `SELECT s.id, ${hasName ? "s.name, " : ""}${hasTranscript ? "s.transcript, " : ""}s.started, s.ended, s.final_outcome,
               COUNT(t.seq) AS calls, MAX(t.ts) AS last_ts
          FROM sessions s
          LEFT JOIN tool_calls t ON t.session_id = s.id
@@ -61,12 +63,13 @@ export function cmdSessions(args: string[]): number {
     const when = (r.last_ts || r.started || "").replace("T", " ").replace(/\..*/, "");
     const holds = holdCounts.get(r.id);
     const holdChip = holds ? c.cyan(`  ⏳ ${holds} awaiting approval`) : "";
-    // Name first — it's what humans scan by; the short id stays for copying
-    // into lastrun/steer (both also accept the name).
-    const name = pad(displayName(r.id, r.name), 16);
-    console.log(
-      `  ${c.cyan(name)} ${c.dim(shortId(r.id))}  ${status.padEnd(20)} ${c.dim(`${r.calls} calls`)}  ${c.dim(when)}${holdChip}`,
-    );
+    // What the session is about leads: it's what humans scan by. The name
+    // and short id that lastrun/steer accept follow on the line below.
+    const face = sessionFace(r.id, r.name, r.transcript);
+    const head = pad(clip(headOf(face, r.id), 34), 34);
+    console.log(`  ${c.cyan(head)}  ${status.padEnd(20)} ${c.dim(`${r.calls} calls`)}  ${c.dim(when)}${holdChip}`);
+    const about = aboutOf(face, r.id);
+    if (about) console.log(`    ${c.dim(about)}`);
   }
   console.log("");
   console.log(c.dim("Full trajectory of one:  reins lastrun <session-id>"));
@@ -75,10 +78,8 @@ export function cmdSessions(args: string[]): number {
   return 0;
 }
 
-function shortId(id: string): string {
-  // First 8 chars are plenty unique within a project and copy cleanly into
-  // `reins lastrun <prefix>` (which matches on prefix).
-  return id.length > 8 ? id.slice(0, 8) : id;
+function clip(s: string, width: number): string {
+  return s.length > width ? s.slice(0, width - 1) + "…" : s;
 }
 
 /** Pad the PLAIN string before coloring (color codes have zero display width). */

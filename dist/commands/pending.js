@@ -39,8 +39,10 @@ exports.cmdDeny = cmdDeny;
 const path = __importStar(require("node:path"));
 const paths_1 = require("../paths");
 const holds_1 = require("../holds");
-const steering_1 = require("../steering");
+const holdActions_1 = require("../holdActions");
 const util_1 = require("../util");
+const db_1 = require("../db");
+const sessionFace_1 = require("../sessionFace");
 const format_1 = require("./format");
 /** `reins pending` — the review queue: every action a hold rule parked. */
 function cmdPending() {
@@ -53,7 +55,17 @@ function cmdPending() {
     // resumes; an earlier one it superseded is abandoned there. Approving such an
     // entry still files the decision, but nothing will come back for it in that
     // session — so say so plainly instead of letting the human believe otherwise.
-    const superseded = supersededDeferIds(pending);
+    const superseded = (0, holdActions_1.supersededDeferIds)(pending);
+    // Which session asked, in words. Best-effort: the queue itself is plain
+    // files and lists without the DB, with mnemonics.
+    let db = null;
+    try {
+        db = (0, db_1.openDbReadOnly)();
+    }
+    catch {
+        /* capture unavailable */
+    }
+    const faceOf = (0, sessionFace_1.faceReader)(db);
     console.log(format_1.c.bold("Pending actions") + format_1.c.dim(" — parked by hold rules, awaiting your decision"));
     console.log("");
     for (const p of pending) {
@@ -62,7 +74,7 @@ function cmdPending() {
             : superseded.has(p.id)
                 ? format_1.c.dim(" ⏸ superseded")
                 : format_1.c.dim(" ⏸ in session");
-        console.log(`  ${format_1.c.cyan(p.id)}  ${format_1.c.dim(age(p.ts).padEnd(8))} ${format_1.c.dim(shortId(p.session_id).padEnd(9))}` +
+        console.log(`  ${format_1.c.cyan(p.id)}  ${format_1.c.dim(age(p.ts).padEnd(8))} ${format_1.c.dim((0, sessionFace_1.shortId)(p.session_id).padEnd(9))}` +
             ` ${p.tool.padEnd(8)} ${(0, util_1.truncate)((0, util_1.summarizeToolInput)(p.tool, p.input), 70)}` +
             ` ${format_1.c.dim(`[${p.rule_id}]`)}${mark}`);
         // The directory is part of what gets approved, so the approver sees it
@@ -70,6 +82,9 @@ function cmdPending() {
         const where = workdirLabel(p.cwd);
         if (where)
             console.log(`            ${format_1.c.dim("in " + where)}`);
+        const face = faceOf(p.session_id);
+        const about = (0, sessionFace_1.aboutOf)(face, p.session_id);
+        console.log(`            ${format_1.c.dim("from " + (0, sessionFace_1.headOf)(face, p.session_id) + (about ? " · " + about : ""))}`);
     }
     console.log("");
     console.log(format_1.c.dim("Approve one: ") +
@@ -95,28 +110,6 @@ function workdirLabel(cwd) {
     return rel + path.sep;
 }
 /**
- * Ids of deferred holds that a later deferred hold in the same session has
- * displaced. Only the newest survives the resume replay.
- */
-function supersededDeferIds(pending) {
-    const newest = new Map();
-    for (const p of pending) {
-        if (p.transport !== "defer")
-            continue;
-        const cur = newest.get(p.session_id);
-        if (!cur || cur.ts < p.ts)
-            newest.set(p.session_id, p);
-    }
-    const out = new Set();
-    for (const p of pending) {
-        if (p.transport !== "defer")
-            continue;
-        if (newest.get(p.session_id)?.id !== p.id)
-            out.add(p.id);
-    }
-    return out;
-}
-/**
  * `reins approve <id>` — sign off on a parked action. Files a one-shot decision
  * the boundary collects the next time the agent comes back for that action.
  *
@@ -130,30 +123,14 @@ function cmdApprove(args) {
     const found = resolveId(args[0], "approve");
     if (!found)
         return 1;
-    (0, holds_1.writeDecision)(undefined, found, "approved");
-    (0, holds_1.removePending)(undefined, found.id);
-    resolveHold(found.id, "approved");
-    const summary = (0, util_1.summarizeToolInput)(found.tool, found.input);
-    // The reply channel: a targeted steer tells the (possibly still running)
-    // session its parked action is cleared. If the run already ended, the
-    // decision still stands — it waits at the boundary. Steering delivery is
-    // best-effort here; the filed decision is the gate.
-    try {
-        (0, steering_1.appendSteering)(`Your parked action ${found.id} (${found.tool}: ${(0, util_1.truncate)(summary, 120)}) is approved — ` +
-            `retry that exact call now, from the same working directory, then continue.`, undefined, found.session_id);
-    }
-    catch {
-        /* session steering is a courtesy; the decision is what matters */
-    }
-    console.log(format_1.c.green(`✓ Approved ${format_1.c.bold(found.id)}`) + format_1.c.dim(` (${found.tool}: ${(0, util_1.truncate)(summary, 80)})`));
-    if (found.transport === "defer") {
+    const done = (0, holdActions_1.approveHold)(found, "human-cli");
+    console.log(format_1.c.green(`✓ Approved ${format_1.c.bold(done.id)}`) + format_1.c.dim(` (${done.tool}: ${(0, util_1.truncate)(done.summary, 80)})`));
+    if (done.resume) {
         // The call is parked inside Claude Code's own transcript; nothing runs
         // until that session is resumed. Say so, and hand over the exact command —
         // an approval the human thinks landed but that nobody resumes is the
         // quietest possible failure.
-        console.log(format_1.c.dim("  The original call is parked in the session. Resume it to run:") +
-            "\n    " +
-            format_1.c.cyan(`claude --resume ${found.session_id} -p "continue"`));
+        console.log(format_1.c.dim("  The original call is parked in the session. Resume it to run:") + "\n    " + format_1.c.cyan(done.resume));
     }
     else {
         console.log(format_1.c.dim("  One-shot: the next attempt of this ") +
@@ -177,25 +154,8 @@ function cmdDeny(args) {
     const found = resolveId(args[0], "deny");
     if (!found)
         return 1;
-    // File the refusal, don't just drop the queue entry: a deferred call will be
-    // replayed at the boundary, and without a recorded answer it would re-park
-    // and ask the same question forever. The refusal (and any alternative) is
-    // delivered to the agent exactly when it asks.
-    (0, holds_1.writeDecision)(undefined, found, "denied", steerMsg || undefined);
-    (0, holds_1.removePending)(undefined, found.id);
-    recordRejection(found);
-    resolveHold(found.id, "denied");
-    const summary = (0, util_1.summarizeToolInput)(found.tool, found.input);
-    if (steerMsg) {
-        try {
-            (0, steering_1.appendSteering)(`Your parked action ${found.id} (${found.tool}: ${(0, util_1.truncate)(summary, 120)}) was refused. ` +
-                `Instead: ${steerMsg}`, undefined, found.session_id);
-        }
-        catch {
-            /* best-effort */
-        }
-    }
-    console.log(format_1.c.red(`✗ Refused ${format_1.c.bold(found.id)}`) + format_1.c.dim(` (${found.tool}: ${(0, util_1.truncate)(summary, 80)})`));
+    const done = (0, holdActions_1.denyHold)(found, steerMsg || undefined, "human-cli");
+    console.log(format_1.c.red(`✗ Refused ${format_1.c.bold(done.id)}`) + format_1.c.dim(` (${done.tool}: ${(0, util_1.truncate)(done.summary, 80)})`));
     if (steerMsg)
         console.log(format_1.c.dim(`  Steered the session instead: "${(0, util_1.truncate)(steerMsg, 90)}"`));
     else
@@ -221,60 +181,6 @@ function resolveId(idArg, verb) {
         return null;
     }
     return matches[0];
-}
-/**
- * Best-effort audit row for a human refusal. The queue file is gone after this,
- * so without the row the trajectory would show a HELD that silently vanished.
- */
-function recordRejection(p) {
-    try {
-        const { openDb, upsertSessionStart, insertToolCall, } = require("../db");
-        const db = openDb();
-        if (!db)
-            return;
-        const { hashToolInput } = require("../util");
-        const { resolveProjectDir } = require("../paths");
-        upsertSessionStart(db, p.session_id, resolveProjectDir(), (0, util_1.nowIso)());
-        insertToolCall(db, {
-            session_id: p.session_id,
-            tool: p.tool,
-            input_summary: `REFUSED: ` +
-                (0, util_1.summarizeToolInput)(p.tool, p.input) +
-                ` [guard:${p.rule_id}] [hold:${p.id}]`,
-            input_hash: hashToolInput("REFUSED:" + p.tool, p.input),
-            ok: 0,
-            ts: (0, util_1.nowIso)(),
-        });
-    }
-    catch {
-        /* audit is best-effort; the refusal itself already happened (file removed) */
-    }
-}
-/**
- * Close the loop on the decisions row this hold parked, so `reins audit`
- * shows how a held action was resolved, not just that it was held. Best-effort
- * like recordRejection: the approve/deny itself already happened via the
- * pending-queue file, so a capture failure here changes nothing about that.
- */
-function resolveHold(id, resolution) {
-    try {
-        const { openDb, resolveDecision } = require("../db");
-        const db = openDb();
-        if (!db)
-            return;
-        resolveDecision(db, {
-            hold_id: id,
-            resolution,
-            resolver: "human-cli",
-            resolved_ts: (0, util_1.nowIso)(),
-        });
-    }
-    catch {
-        /* audit is best-effort; the approve/deny already happened */
-    }
-}
-function shortId(id) {
-    return id.length > 8 ? id.slice(0, 8) : id;
 }
 function age(tsIso) {
     const ms = Date.now() - new Date(tsIso).getTime();

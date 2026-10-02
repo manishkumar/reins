@@ -3,6 +3,182 @@
 All notable changes to `reins` are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`mods/reins-status`, an experimental read-only Claude Code mod.** `/reins`
+  opens a pane beside the conversation with each hold's full input, and a
+  count sits in the status line and in one line above the prompt, read from
+  `.reins/pending/`. A new hold raises a toast once. It has no
+  approval control and hooks no tool call. The mod API is early access. The
+  mod was tested against the engine with `claude plugin test` and seen to load
+  in a headless run. The status line, the band and the pane were seen in a
+  live session; the toast was not.
+- **`reins init --mod` installs that mod.** It copies the mod into
+  `.claude/skills/reins-status/`, where Claude Code loads it once the
+  workspace is trusted. It is opt-in, it never writes into a folder of that
+  name that is not the reins mod, and `reins uninstall` removes exactly the
+  files it added. The mod now ships in the npm package.
+- **`docs/mods-probe.md`.** What Claude Code 2.1.287 does with a mod hook that
+  throws, times out or opens a dialog, and where mods sit against command
+  hooks, measured with `mods/probe`. A mod fails open and runs above
+  `PreToolUse`, so the reins gate stays a command hook. The threat model in
+  the README now says a mod can rewrite or answer a call before reins sees it.
+
+- **Sessions are named by what they are about.** The cockpit, `reins
+  sessions`, `reins pending`, `reins lastrun`, the steer picker and the report
+  lead with the title Claude Code gave the session, with its git branch and
+  your last prompt beside it. A name set with `reins name` still leads, and
+  the mnemonic and short id stay on the row as the way to address it. The
+  title is read from the tail of the session transcript, which is not a
+  documented format, so it falls back to the mnemonic when it cannot be read.
+- **Claim check.** When a turn ends, reins compares what the session did with
+  its own tool calls and reports one of: the last test or build run failed,
+  files were edited after the last run, files were edited and nothing was
+  run, the result is not visible (a piped or interrupted run), or the last
+  run passed. Failed, stale and unverified get a line at Stop; every verdict
+  is in `reins lastrun`, the cockpit and the report. It reports and never
+  blocks. `"claimCheck": false` silences the Stop line.
+- **Footprint.** `reins lastrun`, the cockpit's agent detail pane and the
+  report show which files and directories a session edited and which commands
+  it ran most, next to the prompt it was given. Facts only: reins does not
+  judge whether the two match. Shell commands that can change files are
+  counted, since their changes are not in the list.
+
+- **`reins watch` is now a cockpit you can act from.** Three panes: NEEDS YOU
+  (held actions, hold breaches, worked-around guards), AGENTS (live status,
+  a 12-minute activity sparkline, last call or queued steer), and a detail
+  pane with a hold's full proposed input or an agent's trajectory.
+  - **Approve and deny from the keyboard.** `a` opens a dialog with the full
+    input, and `y` stays locked until it has been scrolled to the end. The
+    action is re-read when `y` is pressed, and nothing is approved if it was
+    resolved elsewhere or no longer matches what was reviewed. `d` denies,
+    optionally with an alternative sent as steering. The CLI and the cockpit
+    share one implementation (`src/holdActions.ts`), and `reins audit`
+    records the resolver as `human-tui` or `human-cli`.
+  - **New holds are announced** with a header flash, the terminal bell, and a
+    desktop notification in iTerm2, WezTerm and Ghostty. `--quiet` silences
+    the bell and notification. The selection never moves on its own.
+  - **Works without SQLite** as an approval queue: holds and the bypass
+    ledger are files. The agents pane explains that it needs capture.
+  - **Agent text is sanitized** before it reaches the terminal. Control
+    characters in commands and paths are replaced, so an escape sequence in
+    a command can't set the clipboard or draw over a dialog.
+  - Resizes live, redraws only changed lines, and needs 60×14 at least.
+    `--once` and piped output print a plain snapshot with the `reins approve`
+    / `reins deny` command for each hold.
+
+- **`reins report` leads with what needs you.** A "Needs you" section at the
+  top lists every parked hold (the proposed input, how long it has waited, and
+  the `reins approve` / `reins deny` commands), plus hold breaches and
+  worked-around guards from the last 7 days. Older events are counted and
+  pointed at `reins audit --guards`. A page with nothing waiting says so.
+- **`reins report` works without SQLite.** Holds and the bypass ledger are
+  plain files, so the report now renders them on Node < 22.5 or with
+  `REINS_NO_SQLITE=1` and says that session history needs capture.
+
+### Changed
+
+- **The README is a short front door, and the detail lives in `docs/`.** Each
+  feature's full text and caveats moved, unchanged, to its own page:
+  `docs/steering.md`, `guards.md`, `holds.md`, `watch.md`, `claim-check.md`,
+  `capture.md`, `mods.md`, `compatibility.md` and `how-it-works.md`. The README
+  keeps a one-line version of the limits that decide whether reins fits, under
+  "Before you rely on it". The cockpit screenshots are regenerated from a
+  scripted scenario (`assets/cockpit-demo-frame.cjs`).
+- `reins watch` reads "looping" as a consecutive streak of identical calls,
+  matching the loop alarm. It used to count repeats anywhere in the session.
+- Steering typed into `reins watch` appends to the queue, like `reins steer`.
+  It used to replace it, which could drop a nudge that hadn't been delivered.
+
+- Finished sessions start collapsed in the report unless they are the most
+  recent one or have a "Needs you" item. Their summary line still shows the
+  blocked and loop counts.
+- The report file is written owner-only (`0600`), including when it overwrites
+  an existing file. It contains commands and paths from agent runs.
+- Durations of 48 hours or more read in days (`19d 3h`).
+
+- **The cockpit shows why a hold parked.** The text a Bash rule matched is
+  highlighted in the proposed input, in the detail pane and the approve
+  dialog. When it sits below the third line of a long command, that line is
+  also shown above the input with its line number. The match comes from the
+  guard's own matcher (`firingSegment` in `src/guards.ts`, which
+  `checkGuards` now decides with), read against the rule as it stands now.
+- **Bash rules no longer match heredoc text that is data.** A body handed to
+  `cat`, `tee`, `python`, `node`, `ruby` or `perl` is not a shell command, so
+  a Python script that mentions a guarded command no longer parks or blocks.
+  The body is still matched when anything may run it: a shell, `ssh`, a
+  database client or any other command, a pipe or command substitution on the
+  opening line, a `$(…)` or backtick in a body with an unquoted delimiter, or
+  a missing closing delimiter. This narrows what every bash rule matches,
+  `deny` rules included.
+- **The agent list leads with what waits on you.** Order is looping, then
+  sessions with a held action, then newest first. A session with no call for
+  over a day is counted in the footer and not listed, unless it is looping,
+  holds an action or has a steer queued.
+- **Agent rows.** The call count is labeled (`76 calls`) and is given up
+  before the title is cut. A session with no title, branch or prompt takes
+  two lines. A call that did not simply run says what happened to it
+  (`denied`, `held`, `failed`, `approved`, `refused`). The "result not
+  visible" claim verdict is no longer on the row; the detail pane has it.
+- **Dates in the cockpit** read `10 Sep 22:50` in every locale. A hold whose
+  session has been quiet for over a day says so.
+
+### Fixed
+
+- **`reins init` could turn off every hook on an older Claude Code.** Claude
+  Code 2.0.55 and older load no hooks from a settings file that names an event
+  they do not know, and `PostToolUseFailure` arrived in 2.0.56. On those
+  versions the four-hook block left reins not running at all, with no error.
+  Found by running 2.0.0, 2.0.55 and 2.0.56 against the same file. `reins
+  init` now reads `claude --version`, leaves the hook out on an older version
+  and removes its own entry from a file an earlier init wrote. `reins doctor`
+  reports the Claude Code version and flags a file that would be ignored.
+- **Safeguards for an unknown Claude Code version.** The fourth hook is
+  written only on evidence. The version is read from `claude --version`, from
+  the environment of the session `reins init` is run in, and from the version
+  a reins hook last saw in the project; the oldest one decides. With none
+  readable, init writes the three hooks every version accepts and says so.
+  `reins init --failure-hook` writes it on the person's word, and is refused
+  on a version known to be old. Each hook now notes that it ran in
+  `.reins/hooks-seen.json`, and `reins doctor` says whether a hook has run
+  since the settings file last changed.
+- **The claim check called a masked test run "verified".** `npm test || true`,
+  `npm test; echo done`, `npm test &` and `if npm test; then …` end with
+  another command's exit status. They are now "result not visible".
+  `npm test || exit 1` and a `;` chain under `set -e` still count.
+- **The claim check missed test runs behind a wrapper.** `timeout 120 npm
+  test`, `(cd pkg && npm test)`, `./node_modules/.bin/jest`, `env CI=1 npm
+  test` and `bash -c "npm test"` read as "no test or build run". They are now
+  recognized.
+- **Approving from the cockpit compared against the wrong snapshot.** The
+  check that an action is unchanged since it was reviewed read the reviewed
+  copy from the screen's model, which refreshes under an open dialog. It now
+  keeps the action as it stood when the dialog opened.
+- **The cockpit at narrow widths.** Found by running it in a real terminal at
+  80×24 and 150×40. The header ran its counts into the clock; it now gives up
+  the refresh interval, the idle count and the active count, in that order,
+  and keeps what needs you and the looping count. A long session title pushed
+  the status and the claim check verdict off the agent row; the row now drops
+  its sparkline and cuts the title first. A looping session could be hidden
+  under "+2 more"; it is now listed first. File paths inside the project are
+  shown from the project root. A hold row cuts the session title before the
+  rule id and always keeps a column between them. The help dialog's key
+  column no longer runs into its text, and the activity line stays inside the
+  detail pane. The left column is half the screen, up to 76 columns.
+- **Failed tool calls were never captured.** Claude Code sends a call that
+  failed to `PostToolUseFailure`, which reins did not register. No failed
+  command reached the trajectory, a command failing on repeat never tripped
+  the loop alarm, and a held action that executed and failed was never
+  reported as a HOLD BREACH. `reins init` now wires the fourth hook, adds it
+  to an existing install without touching the rest, and `reins doctor`
+  reports an install that is missing it. **Run `reins init` and restart
+  Claude Code to pick it up.**
+
+- The per-tool and guard-fire bars in the report rendered empty. The bar was
+  an inline element, so its width was ignored.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added

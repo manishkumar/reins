@@ -152,6 +152,11 @@ async function runHook(rest) {
                 await runPostTool();
                 return 0;
             }
+            case "post-tool-failure": {
+                const { runPostTool } = await Promise.resolve().then(() => __importStar(require("./hooks/postTool")));
+                await runPostTool(true);
+                return 0;
+            }
             case "stop": {
                 const { runStop } = await Promise.resolve().then(() => __importStar(require("./hooks/stop")));
                 await runStop();
@@ -169,13 +174,16 @@ async function runHook(rest) {
     }
 }
 function printHelp() {
-    console.log(`reins — steer a running Claude Code agent, block forbidden actions,
-catch loops, and capture every run. Local-first. No daemon, no backend.
+    console.log(`reins — keep control of Claude Code agents you aren't watching: hold risky
+actions for approval, block forbidden ones, watch every agent, nudge one
+mid-run, and capture every run. Local-first. No daemon, no backend.
 
 USAGE
   reins init                       Set up .reins/ and wire hooks into settings
   reins init --print               Print the hooks block instead of writing it
   reins init --local               Wire into .claude/settings.local.json
+  reins init --failure-hook        Write PostToolUseFailure when the Claude Code version can't be read (needs 2.0.56+)
+  reins init --mod                 Also install the read-only status mod (hold queue inside Claude Code)
   reins doctor                     Diagnose your setup when something's off
   reins uninstall [--purge]        Remove reins hooks (--purge also drops .reins)
   reins steer "<message>"          Queue live steering for the next tool call
@@ -209,7 +217,9 @@ USAGE
   reins audit --guards             Were the guards right? Every denial scored:
                                    stale rules, and vetoes worked around anyway
   reins sessions                   List recent sessions in this project
-  reins watch                      Live cockpit: all agents, steer any one
+  reins watch                      Cockpit: every agent and everything waiting on
+                                   you; approve/deny holds, steer any agent
+                                   (--once snapshot, --quiet no bell, -n SECS)
   reins report [--open]            Write a local HTML report of every run
   reins loops                      Sessions where the agent looped
 

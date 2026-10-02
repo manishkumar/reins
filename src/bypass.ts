@@ -133,7 +133,7 @@ export function retryScore(deniedFp: string[], executedFp: string[]): number {
   return score;
 }
 
-function readLedger(cwd?: string): DenialRecord[] {
+export function readLedger(cwd?: string): DenialRecord[] {
   try {
     const raw = fs.readFileSync(ledgerPath(cwd), "utf8");
     const out: DenialRecord[] = [];

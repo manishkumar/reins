@@ -1,0 +1,1 @@
+{ "name": "reins-probe", "version": "0.1.0", "description": "Probe for docs/mods-probe.md: how the mod engine treats a slow, failing or dialog-opening tool.call hook, and where it sits against settings hooks." }

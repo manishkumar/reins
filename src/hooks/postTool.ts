@@ -1,23 +1,31 @@
+import { markHookRan } from "../heartbeat";
 import { readStdinJson, summarizeToolInput, hashToolInput, nowIso, truncate } from "../util";
 import { resolveProjectDir } from "../paths";
 import { loadConfig } from "../config";
 import { emitPostToolContext } from "../hookio";
 
 /**
- * PostToolUse: record the executed call, then raise the loop alarm if this exact
- * (tool + input) has now repeated >= the configured threshold.
+ * PostToolUse and PostToolUseFailure: record the executed call, then raise the
+ * loop alarm if this exact (tool + input) has now repeated >= the configured
+ * threshold.
+ *
+ * Claude Code splits the two: a call that failed (a non-zero exit, a tool
+ * error) goes only to PostToolUseFailure. `failed` is that event. A failing
+ * call still executed, so the breach and bypass checks below run for it too.
  */
-export async function runPostTool(): Promise<void> {
+export async function runPostTool(failed = false): Promise<void> {
   const payload = await readStdinJson();
   const cwd = (payload.cwd as string) || undefined;
   const sessionId = (payload.session_id as string) || "";
   const toolName = (payload.tool_name as string) || "";
   const toolInput = payload.tool_input ?? {};
   const toolResponse = payload.tool_response;
+  markHookRan(failed ? "PostToolUseFailure" : "PostToolUse", sessionId, cwd);
 
   const inputHash = hashToolInput(toolName, toolInput);
   const summary = summarizeToolInput(toolName, toolInput);
-  const ok = inferOk(toolResponse);
+  // An interrupted call says nothing about whether the command works.
+  const ok = failed ? (payload.is_interrupt === true ? null : 0) : inferOk(toolResponse);
 
   let repeatCount = 0;
   try {
@@ -29,7 +37,7 @@ export async function runPostTool(): Promise<void> {
     } = require("../db") as typeof import("../db");
     const db = sessionId ? openDb(cwd) : null; // no real session => don't record
     if (db) {
-    upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso());
+    upsertSessionStart(db, sessionId, resolveProjectDir(cwd), nowIso(), (payload.transcript_path as string) || undefined);
     insertToolCall(db, {
       session_id: sessionId,
       tool: toolName,
@@ -96,7 +104,7 @@ export async function runPostTool(): Promise<void> {
       `This usually means the current approach is stuck. Stop repeating it and ` +
       `try something different — change the input, inspect why it isn't working, ` +
       `or ask the developer.`;
-    emitPostToolContext(warning);
+    emitPostToolContext(warning, failed ? "PostToolUseFailure" : "PostToolUse");
     process.stderr.write(warning + "\n");
   }
 }

@@ -1,12 +1,14 @@
 # CLAUDE.md
 
-reins is a kit of Claude Code hooks that lets a human steer a *running* agent: soft
-nudges (`steer`), hard vetoes (`guard`), an approval queue (`hold`), a loop alarm, and
-SQLite capture of every run. Local-first: no daemon, no backend, no accounts.
+reins is a kit of Claude Code hooks that keeps a human in control of agents they are
+not watching: an approval queue (`hold`), hard vetoes (`guard`), a cockpit over every
+agent (`watch`), soft nudges to a *running* agent (`steer`), a loop alarm, and SQLite
+capture of every run. Local-first: no daemon, no backend, no accounts.
 
-Read the README before changing behavior — its "honest caveats" sections are spec, not
-marketing copy. If you change what a feature can or can't do, update its caveat in the
-same commit.
+Read the README and the feature's page under `docs/` before changing behavior. The
+"honest caveats" sections in `docs/` and the README's "Before you rely on it" list are
+spec, not marketing copy. If you change what a feature can or can't do, update its
+caveat in `docs/` in the same commit, and the README's one-line version if it has one.
 
 ## Commands
 
@@ -106,6 +108,18 @@ will never see. That is the frame for everything below.
     that loaded must not be over-claimed: the measure requires the action words
     to survive, not just the tokens, or a `git fetch` reads as a bypassed
     `git push --force`.
+
+13. **Every approval surface is `reins approve`, never a looser copy.** The CLI and
+    the `reins watch` cockpit resolve holds through `src/holdActions.ts` and nothing
+    else. The cockpit adds two checks a keypress needs: `y` stays locked until the full
+    input has been scrolled through, and the action is re-read by exact id at
+    confirmation (`reloadForDecision`), approving nothing if it is gone or changed. The
+    selection never moves on its own, so a new hold can't slide under the cursor. The
+    HTML report may show the queue but never answers it: an approve button would need a
+    local server, which any open web page can POST to. Text from agent runs goes through
+    `clean()` in `src/tui/term.ts` before it reaches the terminal; an escape sequence in
+    a command can otherwise set the clipboard or paint over the approve dialog. None of
+    `src/tui/` is reachable from `reins hook *`.
 
 ## Judgment calls that keep recurring
 

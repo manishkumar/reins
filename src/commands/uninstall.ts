@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { unmergeReinsHooks } from "../settingsMerge";
 import { reinsDir } from "../paths";
+import { removeMod, MOD_NAME } from "../modInstall";
 import { c } from "./format";
 
 /**
@@ -34,6 +35,9 @@ export function cmdUninstall(args: string[]): number {
   if (touched === 0) {
     console.log(c.dim("No reins hooks found in .claude/settings.json or settings.local.json."));
   }
+
+  const modFiles = removeMod(process.cwd());
+  if (modFiles > 0) console.log(c.green("✓ Removed the status mod from ") + c.cyan(`.claude/skills/${MOD_NAME}/`));
 
   const dir = reinsDir();
   if (purge && fs.existsSync(dir)) {

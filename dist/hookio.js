@@ -82,10 +82,10 @@ function emitPreToolContext(additionalContext) {
         },
     }));
 }
-function emitPostToolContext(additionalContext) {
+function emitPostToolContext(additionalContext, hookEventName = "PostToolUse") {
     process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
-            hookEventName: "PostToolUse",
+            hookEventName,
             additionalContext,
         },
     }));

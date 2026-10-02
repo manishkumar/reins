@@ -4,6 +4,11 @@ import { c } from "./format";
 import { truncate, summarizeToolInput } from "../util";
 import { loadConfig } from "../config";
 import { pendingForSession } from "../holds";
+import { faceReader, type SessionFace } from "../sessionFace";
+import { checkClaim } from "../claim";
+import { footprint, footprintLines } from "../footprint";
+import { resolveProjectDir } from "../paths";
+import { proposalWorkdir } from "../holds";
 
 interface SessionRow {
   id: string;
@@ -56,11 +61,13 @@ export function cmdLastrun(args: string[]): number {
 
   const threshold = loadConfig().loopThreshold;
 
-  printHeader(session, calls.length);
+  printHeader(session, calls.length, faceReader(db)(session.id));
   console.log("");
   printTrajectory(calls, threshold);
   console.log("");
   printSummary(calls, threshold);
+  printClaim(calls);
+  printFootprint(calls);
   printDecisions(db, session.id);
   printAwaiting(session.id);
   return 0;
@@ -117,10 +124,34 @@ function printAwaiting(sessionId: string): void {
   }
 }
 
-function printHeader(s: SessionRow, callCount: number): void {
+/** What the session's own calls say about its work being done (src/claim.ts). */
+function printClaim(calls: CallRow[]): void {
+  const claim = checkClaim(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })));
+  if (claim.verdict === "none") return;
+  const tone = claim.verdict === "failed" ? c.red : claim.verdict === "verified" ? c.green : claim.verdict === "unknown" ? c.dim : c.yellow;
+  console.log("");
+  console.log(c.bold("Claim check") + c.dim("  (from this session's own calls; reports, never blocks)"));
+  console.log(`  ${tone(claim.text)}`);
+  if (claim.command) console.log(`  ${c.dim(truncate(claim.command, 110))}`);
+}
+
+/** What the session edited and ran, to read beside what it was asked (src/footprint.ts). */
+function printFootprint(calls: CallRow[]): void {
+  const lines = footprintLines(
+    footprint(calls.map((r) => ({ tool: r.tool, summary: r.input_summary, ok: r.ok })), proposalWorkdir(resolveProjectDir())),
+  );
+  if (!lines.length) return;
+  console.log("");
+  console.log(c.bold("Footprint") + c.dim("  (facts from the captured calls; whether it matches the ask is yours to judge)"));
+  for (const l of lines) console.log(l.startsWith("  ") ? c.dim("  " + l) : "  " + l);
+}
+
+function printHeader(s: SessionRow, callCount: number, face: SessionFace): void {
   const dur = duration(s.started, s.ended);
-  console.log(c.bold("reins · last run"));
-  console.log(`  ${c.dim("session")}  ${s.id}`);
+  console.log(c.bold("reins · last run") + (face.label === face.name ? "" : "  " + c.cyan(face.label)));
+  console.log(`  ${c.dim("session")}  ${face.name} ${c.dim("·")} ${s.id}`);
+  if (face.branch) console.log(`  ${c.dim("branch")}   ${face.branch}`);
+  if (face.asked) console.log(`  ${c.dim("asked")}    ${truncate(face.asked, 160)}`);
   if (s.repo) console.log(`  ${c.dim("repo")}     ${s.repo}`);
   console.log(`  ${c.dim("when")}     ${s.started ?? "?"}${dur ? c.dim(`  (${dur})`) : ""}`);
   const outcome = s.final_outcome ?? (s.ended ? "ended" : c.yellow("still running / not stopped"));

@@ -38,6 +38,7 @@ const fs = __importStar(require("node:fs"));
 const path = __importStar(require("node:path"));
 const settingsMerge_1 = require("../settingsMerge");
 const paths_1 = require("../paths");
+const modInstall_1 = require("../modInstall");
 const format_1 = require("./format");
 /**
  * Remove reins hooks from the project's Claude Code settings. Leaves the .reins
@@ -69,6 +70,9 @@ function cmdUninstall(args) {
     if (touched === 0) {
         console.log(format_1.c.dim("No reins hooks found in .claude/settings.json or settings.local.json."));
     }
+    const modFiles = (0, modInstall_1.removeMod)(process.cwd());
+    if (modFiles > 0)
+        console.log(format_1.c.green("✓ Removed the status mod from ") + format_1.c.cyan(`.claude/skills/${modInstall_1.MOD_NAME}/`));
     const dir = (0, paths_1.reinsDir)();
     if (purge && fs.existsSync(dir)) {
         fs.rmSync(dir, { recursive: true, force: true });

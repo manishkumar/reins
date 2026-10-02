@@ -1,7 +1,7 @@
 {
   "name": "@manishky/reins",
   "version": "0.4.0",
-  "description": "A local-first kit of Claude Code hooks: steer a running agent mid-flight, hard-block forbidden actions, get warned when it loops, and capture every run's trajectory to a queryable SQLite file. No daemon, no backend, no account.",
+  "description": "Keep control of Claude Code agents you aren't watching. A local-first kit of hooks: hold risky actions for your approval, hard-block forbidden ones, see every agent on one screen, nudge one mid-run, and capture every run to a queryable SQLite file. No daemon, no backend, no account.",
   "keywords": [
     "claude",
     "claude-code",
@@ -29,6 +29,8 @@
   },
   "files": [
     "dist",
+    "mods/reins-status",
+    "!mods/reins-status/hooks/*.test.tsx",
     "README.md",
     "LICENSE"
   ],
