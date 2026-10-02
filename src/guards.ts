@@ -507,6 +507,52 @@ function segmentConfinedTo(args: string[], cwd: string): boolean {
   return true;
 }
 
+/**
+ * The segment of `command` a bash rule fires on, or null when it does not fire.
+ * `checkGuards` decides with this, and `reins watch` shows an approver the same
+ * segment, so what is displayed as the reason is what the guard matched.
+ */
+export function firingSegment(rule: GuardRule, command: string, cwd?: string): string | null {
+  let re: RegExp;
+  try {
+    re = new RegExp(rule.pattern, "i");
+  } catch {
+    return null; // skip malformed user regex rather than crash the guard
+  }
+  const exempt = compileExcept(rule, (p) => new RegExp(p, "i"));
+  // A `cd` anywhere in the command means the hook's cwd is no longer where
+  // a later relative argument actually points (`cd / && rm -rf home`), so
+  // relative resolution is dropped for the whole command rather than
+  // guessed at. Dropping it can only make the guard fire more.
+  const relBase = cwd && !/(?:^|[\s;&|(])cd\s/.test(command) ? cwd : undefined;
+  // Evaluate segment by segment so an exemption can clear ONE command
+  // without clearing its neighbours. With no `except` the behaviour is
+  // identical to matching the whole command: a pattern that matched the
+  // full string matches the segment it lives in.
+  for (const segment of splitCommandSegments(command)) {
+    const stripped = stripQuoted(segment);
+    if (!re.test(stripped)) continue;
+    // Exemptions are matched per ARGUMENT (see tokenizeArgs), so an
+    // exemption clears a rule only when some argument really is the
+    // exempted thing — not merely when the word appears somewhere in the
+    // command text. Bounded further by rm-catastrophic carrying no
+    // exemptions at all: nothing can wave through `rm -rf /`.
+    if (exempt.length > 0) {
+      const args = tokenizeArgs(segment);
+      // An argument that IS the exempted thing, as written.
+      if (args.some((arg) => exempt.some((ex) => ex.test(arg)))) continue;
+      // Or: the session is sitting in exempted space and this segment never
+      // reaches outside it, which is how the same deletion looks when the
+      // agent has already cd'd there (`rm -rf home` in a scratchpad).
+      if (relBase && exempt.some((ex) => ex.test(relBase)) && segmentConfinedTo(args, relBase)) {
+        continue;
+      }
+    }
+    return segment;
+  }
+  return null;
+}
+
 /** Returns the first matching guard rule for a tool call, or null.
  *
  *  `cwd` is the session's working directory (Claude Code sends it on every hook
@@ -526,43 +572,7 @@ export function checkGuards(
       if (toolName !== "Bash") continue;
       const command = typeof input.command === "string" ? input.command : "";
       if (!command) continue;
-      let re: RegExp;
-      try {
-        re = new RegExp(rule.pattern, "i");
-      } catch {
-        continue; // skip malformed user regex rather than crash the guard
-      }
-      const exempt = compileExcept(rule, (p) => new RegExp(p, "i"));
-      // A `cd` anywhere in the command means the hook's cwd is no longer where
-      // a later relative argument actually points (`cd / && rm -rf home`), so
-      // relative resolution is dropped for the whole command rather than
-      // guessed at. Dropping it can only make the guard fire more.
-      const relBase = cwd && !/(?:^|[\s;&|(])cd\s/.test(command) ? cwd : undefined;
-      // Evaluate segment by segment so an exemption can clear ONE command
-      // without clearing its neighbours. With no `except` the behaviour is
-      // identical to matching the whole command: a pattern that matched the
-      // full string matches the segment it lives in.
-      for (const segment of splitCommandSegments(command)) {
-        const stripped = stripQuoted(segment);
-        if (!re.test(stripped)) continue;
-        // Exemptions are matched per ARGUMENT (see tokenizeArgs), so an
-        // exemption clears a rule only when some argument really is the
-        // exempted thing — not merely when the word appears somewhere in the
-        // command text. Bounded further by rm-catastrophic carrying no
-        // exemptions at all: nothing can wave through `rm -rf /`.
-        if (exempt.length > 0) {
-          const args = tokenizeArgs(segment);
-          // An argument that IS the exempted thing, as written.
-          if (args.some((arg) => exempt.some((ex) => ex.test(arg)))) continue;
-          // Or: the session is sitting in exempted space and this segment never
-          // reaches outside it, which is how the same deletion looks when the
-          // agent has already cd'd there (`rm -rf home` in a scratchpad).
-          if (relBase && exempt.some((ex) => ex.test(relBase)) && segmentConfinedTo(args, relBase)) {
-            continue;
-          }
-        }
-        return { rule };
-      }
+      if (firingSegment(rule, command, cwd) !== null) return { rule };
     } else if (rule.type === "path") {
       const paths = pathsFromInput(input);
       if (paths.length === 0) continue;

@@ -28,7 +28,8 @@ const agents = [
 const holds = [{
   action: { id: "9d3c07e2", session_id: "4f02d6c1-bbbb", tool: "Bash", input: {}, input_hash: "x", transport: "deny", rule_id: "publish-hold",
     reason: "Publishing to npm waits for a human.", ts: new Date(t(64)).toISOString(), cwd: "/work/app" },
-  sessionName: "release-bot", input: "npm publish --access public", where: "", superseded: false }];
+  sessionName: "release-bot", input: "npm publish --access public", where: "", superseded: false,
+  match: { start: 0, end: 11, line: 1, lines: 1 }, lastActiveMs: t(64) }];
 const events = [{ kind: "bypass", sessionId: "b81d44e0-cccc", ts: new Date(t(1500)).toISOString(), tool: "Bash", summary: "rm -r test-results", ruleId: "rm-rf", detail: "Denied 11s earlier; a 91%-identical call executed." }];
 // What each session is about, its claim check verdict and its footprint.
 const { footprint } = require(D + "/footprint.js");
@@ -45,7 +46,8 @@ for (const a of agents) {
   Object.assign(a, about[a.name]);
   a.footprint = footprint(a.trajectory.map((c) => ({ tool: c.tool, summary: c.summary, ok: c.kind === "failed" ? 0 : 1 })), "/work/app");
 }
-agents.unshift(...agents.splice(agents.findIndex((a) => a.name === "flaky-e2e"), 1)); // looping sessions are listed first
+// Listed as buildWatchModel orders them: looping, then holding, then newest first.
+agents.sort((a, b) => (a.streak >= 3 ? 0 : a.holds ? 1 : 2) - (b.streak >= 3 ? 0 : b.holds ? 1 : 2));
 holds[0].sessionLabel = about["release-bot"].label;
 holds[0].asked = about["release-bot"].asked;
 const model = { repo: "/work/app", nowMs: NOW, threshold: 3, captured: true, holds, events, olderEvents: 0, agents, broadcast: null };

@@ -2,8 +2,10 @@ import * as path from "node:path";
 import type { AttentionEvent } from "../attention";
 import { footprintLines } from "../footprint";
 import { box, clean, fit, hjoin, overlay, sparkline, Style, width, wrap, type Tone } from "./term";
+import type { MatchSpan } from "./why";
 import {
   liveness,
+  QUIET_AFTER_MS,
   SPARK_BUCKETS,
   SPARK_BUCKET_MS,
   type AgentView,
@@ -242,19 +244,29 @@ function leftColumn(m: WatchModel, ui: UiState, st: Style, row: Row | null, w: n
     title: "AGENTS",
     badge: m.agents.length ? st.dim(String(m.agents.length)) : undefined,
     focused: selAgent >= 0 && !ui.zoom,
-    footer: agentsBody.hidden ? `+${agentsBody.hidden} more` : undefined,
+    footer:
+      [agentsBody.hidden ? `+${agentsBody.hidden} more` : "", m.quietAgents ? `${m.quietAgents} quiet for over a day · reins sessions` : ""]
+        .filter(Boolean)
+        .join(" · ") || undefined,
   });
   return [...needs, ...agents];
 }
 
-/** Keep the selected multi-line item in view; report how many didn't fit. */
+/** Keep the selected multi-line item in view; report how many didn't fit. Items may differ in height. */
 function windowed(items: string[][], sel: number, rows: number): { lines: string[]; hidden: number } {
   if (!items.length || rows <= 0) return { lines: [], hidden: items.length };
-  const per = items[0].length;
-  const fits = Math.max(1, Math.floor(rows / per));
+  const fitsFrom = (from: number): number => {
+    let used = 0;
+    let n = 0;
+    for (let i = from; i < items.length && used + items[i].length <= rows; i++) {
+      used += items[i].length;
+      n++;
+    }
+    return Math.max(1, n);
+  };
   let start = 0;
-  if (sel >= fits) start = sel - fits + 1;
-  const shown = items.slice(start, start + fits);
+  while (sel >= start + fitsFrom(start)) start++;
+  const shown = items.slice(start, start + fitsFrom(start));
   return { lines: shown.flat(), hidden: items.length - shown.length };
 }
 
@@ -268,11 +280,13 @@ function selected(st: Style, lines: string[], on: boolean, iw: number, tone: Ton
 
 function holdItem(h: HoldView, m: WatchModel, st: Style, iw: number, on: boolean): string[] {
   const p = h.action;
-  const age = ago(m.nowMs - Date.parse(p.ts));
+  const waitedMs = m.nowMs - Date.parse(p.ts);
+  const age = ago(waitedMs);
   // The rule is what parked it, so the session label is cut before the rule id is.
   const what = st.fg("warn", st.bold("◆ HELD ")) + st.fg("text", st.bold(clean(p.tool))) + "  " + st.dim(clean(p.rule_id));
   const who = clip(clean(h.sessionLabel ?? h.sessionName), iw - 1 - width(what) - 1 - width(age) - 3);
-  const l1 = lr(what, st.dim(`${who} · `) + st.fg("warn", age), iw - 1);
+  // A hold nobody answered for a day is no longer fresh news; its age fades.
+  const l1 = lr(what, st.dim(`${who} · `) + st.fg(waitedMs > QUIET_AFTER_MS ? "muted" : "warn", age), iw - 1);
   const first = clean(h.input).replace(/\s+/g, " ").trim();
   const l2 = "  " + st.fg("text", first);
   return selected(st, [l1, l2], on, iw, "warn");
@@ -304,20 +318,32 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
   const since = a.lastTsMs != null ? ago(m.nowMs - a.lastTsMs) : "—";
   const label = clean(a.label ?? a.name);
   const state = "  " + st.fg(L.tone, lv === "idle" ? `idle ${since}` : L.label) + claimChip(a, lv, st);
-  const count = st.dim(`${a.calls}`.padStart(4));
+  // A session with no title, branch or prompt has only its id to add, and
+  // that fits beside the mnemonic: the row is two lines instead of three.
+  const bare = (a.label ?? a.name) === a.name && !a.branch && !a.asked;
+  const id = bare ? st.dim(" " + a.id.slice(0, 8)) : "";
   // The status and the verdict are what the row is for. The sparkline is
-  // dropped first (the detail pane has the full one), then the label is cut.
+  // dropped first (the detail pane has the full one), then the call count,
+  // then the label is cut.
   const SPARK = 12;
-  const room = iw - 1 - 2 - width(state) - 1 - width(count);
-  const withSpark = width(label) + SPARK + 1 <= room;
+  const countText = `${a.calls} call${a.calls === 1 ? "" : "s"}`;
+  const base = iw - 1 - 2 - width(state) - width(id) - 1;
+  const withCount = width(label) + width(countText) + 1 <= base;
+  const room = base - (withCount ? width(countText) + 1 : 0);
+  const withSpark = withCount && width(label) + SPARK + 1 <= room;
   const spark = withSpark ? st.fg(lv === "active" || lv === "looping" ? "accent" : "faint", sparkline(a.spark.slice(-SPARK))) + " " : "";
-  const l1 = lr(st.fg(L.tone, L.glyph) + " " + st.fg("text", st.bold(clip(label, room))) + state, spark + count, iw - 1);
+  const l1 = lr(
+    st.fg(L.tone, L.glyph) + " " + st.fg("text", st.bold(clip(label, room))) + id + state,
+    spark + (withCount ? st.dim(countText) : ""),
+    iw - 1,
+  );
   // Who it is and what it was asked: the mnemonic and short id are how you
-  // address it, the branch and prompt are how you recognise it.
+  // address it, the branch and prompt are how you recognise it. The branch is
+  // kept short so the prompt has the rest of the line.
   const l2 =
     "  " +
-    st.dim((a.label ?? a.name) === a.name ? a.id.slice(0, 8) : `${clean(a.name)} ${a.id.slice(0, 8)}`) +
-    (a.branch ? st.fg("faint", " · ") + st.fg("accent", "⎇ " + clean(a.branch)) : "") +
+    st.dim(`${clean(a.name)} ${a.id.slice(0, 8)}`) +
+    (a.branch ? st.fg("faint", " · ") + st.fg("accent", "⎇ " + clip(clean(a.branch), 20)) : "") +
     (a.asked ? st.fg("faint", " · ") + st.dim("❯ " + clean(a.asked)) : "");
   let l3: string;
   if (a.holds) l3 = "  " + st.fg("warn", `◆ ${a.holds} held, waiting on you`);
@@ -326,7 +352,7 @@ function agentItem(a: AgentView, m: WatchModel, st: Style, iw: number, on: boole
     const last = a.trajectory[a.trajectory.length - 1];
     l3 = last ? "  " + callInline(last, st, m.threshold, m.repo) : "  " + st.dim("(no calls yet)");
   }
-  return selected(st, [l1, l2, l3], on, iw);
+  return selected(st, bare ? [l1, l3] : [l1, l2, l3], on, iw);
 }
 
 const CLAIM: Record<string, { glyph: string; tone: Tone; short: string }> = {
@@ -339,11 +365,13 @@ const CLAIM: Record<string, { glyph: string; tone: Tone; short: string }> = {
 
 /**
  * The claim verdict beside the status. Not shown while the agent is working:
- * edits ahead of the next test run are what work in progress looks like.
+ * edits ahead of the next test run are what work in progress looks like. Not
+ * shown for "unknown" either: agents pipe test output by habit, so it lands on
+ * half the rows and says nothing to act on. The detail pane still has it.
  */
 function claimChip(a: AgentView, lv: Liveness, st: Style): string {
   const k = a.claim ? CLAIM[a.claim.verdict] : undefined;
-  if (!k || lv === "active") return "";
+  if (!k || lv === "active" || a.claim.verdict === "unknown") return "";
   return "  " + st.fg(k.tone, `${k.glyph} ${k.short}`);
 }
 
@@ -360,14 +388,14 @@ function clip(s: string, cols: number): string {
   return width(s) <= max ? s : fit(s, max).trimEnd();
 }
 
-const KIND: Record<CallKind, { glyph: string; tone: Tone }> = {
-  ok: { glyph: "›", tone: "muted" },
-  failed: { glyph: "✗", tone: "warn" },
-  denied: { glyph: "⊘", tone: "bad" },
-  asked: { glyph: "?", tone: "warn" },
-  held: { glyph: "◆", tone: "warn" },
-  approved: { glyph: "✓", tone: "good" },
-  refused: { glyph: "✗", tone: "bad" },
+const KIND: Record<CallKind, { glyph: string; tone: Tone; word: string }> = {
+  ok: { glyph: "›", tone: "muted", word: "" },
+  failed: { glyph: "✗", tone: "warn", word: "failed" },
+  denied: { glyph: "⊘", tone: "bad", word: "denied" },
+  asked: { glyph: "?", tone: "warn", word: "asked" },
+  held: { glyph: "◆", tone: "warn", word: "held" },
+  approved: { glyph: "✓", tone: "good", word: "approved" },
+  refused: { glyph: "✗", tone: "bad", word: "refused" },
 };
 
 /** A path inside the project, shown from the project root. Anything else is unchanged. */
@@ -388,7 +416,8 @@ function callInline(c: CallView, st: Style, threshold: number, root = ""): strin
     " " +
     st.dim(clean(c.tool).padEnd(6)) +
     " " +
-    (c.kind === "ok" ? st.fg("text", text) : st.fg(K.tone, text)) +
+    // A glyph alone does not say what happened to the call; the word does.
+    (c.kind === "ok" ? st.fg("text", text) : st.fg(K.tone, st.bold(K.word) + " " + text)) +
     repeat
   );
 }
@@ -463,10 +492,53 @@ function rule(st: Style, label: string, iw: number): string {
   return st.fg("faint", "──") + st.dim(t) + st.fg("faint", "─".repeat(Math.max(0, iw - 2 - width(t))));
 }
 
-/** The proposed input with a gutter, so its edges are unambiguous. */
-function inputBlock(st: Style, input: string, iw: number): string[] {
-  const lines = wrap(clean(input, true), iw - 2);
-  return lines.map((l) => st.fg("warn", "┃ ") + st.fg("text", l));
+/** Private-use characters that carry a match's edges through clean() and wrap(). */
+const MARK_ON = "\uE000";
+const MARK_OFF = "\uE001";
+
+/**
+ * The proposed input with a gutter, so its edges are unambiguous. The text the
+ * rule matched is highlighted, and the lines holding it carry a ▶ in the gutter.
+ */
+function inputBlock(st: Style, input: string, iw: number, match?: { start: number; end: number } | null): string[] {
+  const safe = (s: string) => clean(s.replace(/[\uE000\uE001]/g, "·"), true);
+  const text = match
+    ? safe(input.slice(0, match.start)) + MARK_ON + safe(input.slice(match.start, match.end)) + MARK_OFF + safe(input.slice(match.end))
+    : safe(input);
+  let on = false;
+  return wrap(text, iw - 2).map((l) => {
+    let hit = on;
+    let out = "";
+    let buf = "";
+    const flush = () => {
+      if (buf) out += on ? st.bg("warnBg", st.fg("warn", st.bold(buf))) : st.fg("text", buf);
+      buf = "";
+    };
+    for (const ch of l) {
+      if (ch === MARK_ON || ch === MARK_OFF) {
+        flush();
+        on = ch === MARK_ON;
+        hit = hit || on;
+      } else buf += ch;
+    }
+    flush();
+    return st.fg("warn", hit ? st.bold("▶ ") : "┃ ") + out;
+  });
+}
+
+/**
+ * The line a rule matched, lifted above the full input when it sits too far
+ * down to be seen without scrolling. A hold on a ninety-line script otherwise
+ * names a rule and leaves the approver to find what tripped it.
+ */
+function whyBlock(st: Style, h: HoldView, iw: number): string[] {
+  const mt: MatchSpan | null = h.match;
+  if (!mt || mt.line <= 3) return [];
+  const from = h.input.lastIndexOf("\n", mt.start - 1) + 1;
+  const nl = h.input.indexOf("\n", from);
+  const to = nl < 0 ? h.input.length : nl;
+  const block = inputBlock(st, h.input.slice(from, to), iw, { start: mt.start - from, end: Math.min(mt.end, to) - from });
+  return ["", rule(st, `the rule matched line ${mt.line} of ${mt.lines}`, iw), ...block.slice(0, 4), ...(block.length > 4 ? [st.dim("  …")] : [])];
 }
 
 export function holdDetail(h: HoldView, m: WatchModel, st: Style, iw: number): string[] {
@@ -478,7 +550,11 @@ export function holdDetail(h: HoldView, m: WatchModel, st: Style, iw: number): s
     ...kv(st, "session", sessionLine(h.sessionLabel, h.sessionName, p.session_id), iw),
     ...(h.asked ? kv(st, "asked", clean(h.asked), iw, "muted") : []),
     ...kv(st, "directory", h.where ? clean(h.where) : "project root", iw),
-    ...kv(st, "waiting", `${waited} (since ${new Date(p.ts).toLocaleString()})`, iw),
+    ...kv(st, "waiting", `${waited} (since ${stamp(Date.parse(p.ts), m.nowMs)})`, iw),
+    // A deny-transport approval is spent by a retry. A session quiet for a day may never make one.
+    ...(p.transport !== "defer" && h.lastActiveMs != null && m.nowMs - h.lastActiveMs > QUIET_AFTER_MS
+      ? kv(st, "", `the session's last call was ${ago(m.nowMs - h.lastActiveMs)} ago; an approval is used only if it retries this call`, iw, "muted")
+      : []),
     ...kv(
       st,
       "transport",
@@ -492,7 +568,8 @@ export function holdDetail(h: HoldView, m: WatchModel, st: Style, iw: number): s
   if (h.superseded) {
     out.push("", ...wrap("⚠ superseded: this session deferred a newer call. Only the newest is replayed on resume.", iw).map((l) => st.fg("bad", l)));
   }
-  out.push("", rule(st, `proposed ${clean(p.tool)} input`, iw), ...inputBlock(st, h.input, iw));
+  out.push(...whyBlock(st, h, iw));
+  out.push("", rule(st, `proposed ${clean(p.tool)} input`, iw), ...inputBlock(st, h.input, iw, h.match));
   out.push("", st.fg("accent", st.bold("a")) + st.dim(" approve once   ") + st.fg("accent", st.bold("d")) + st.dim(" deny, optionally with what to do instead"));
   return out;
 }
@@ -500,7 +577,7 @@ export function holdDetail(h: HoldView, m: WatchModel, st: Style, iw: number): s
 function eventDetail(e: AttentionEvent, m: WatchModel, st: Style, iw: number): string[] {
   const breach = e.kind === "breach";
   const out: string[] = [
-    ...kv(st, "when", `${ago(m.nowMs - Date.parse(e.ts))} ago (${new Date(e.ts).toLocaleString()})`, iw),
+    ...kv(st, "when", `${ago(m.nowMs - Date.parse(e.ts))} ago (${stamp(Date.parse(e.ts), m.nowMs)})`, iw),
     ...kv(st, "session", e.sessionId.slice(0, 8), iw),
     ...(e.ruleId ? kv(st, breach ? "hold" : "rule", clean(e.ruleId), iw, "warn") : []),
     ...kv(st, "detail", clean(e.detail), iw),
@@ -532,7 +609,7 @@ function agentDetail(a: AgentView, m: WatchModel, st: Style, iw: number): string
           ...(a.claim.command ? kv(st, "", clean(a.claim.command), iw, "muted") : []),
         ]
       : []),
-    ...kv(st, "calls", String(a.calls) + (a.startedMs != null ? ` since ${new Date(a.startedMs).toLocaleString()}` : ""), iw),
+    ...kv(st, "calls", String(a.calls) + (a.startedMs != null ? ` since ${stamp(a.startedMs, m.nowMs)}` : ""), iw),
   ];
   if (a.streak > 1) {
     out.push(
@@ -593,9 +670,10 @@ export function approveBody(m: WatchModel, ui: UiState, st: Style, holdId: strin
     ...kv(st, "reason", clean(p.reason), iw),
     ...kv(st, "session", sessionLine(hv.sessionLabel, hv.sessionName, p.session_id), iw),
     ...kv(st, "directory", hv.where ? clean(hv.where) : "project root", iw),
+    ...whyBlock(st, hv, iw),
     "",
     rule(st, `${clean(p.tool)} · the exact input you are approving`, iw),
-    ...inputBlock(st, hv.input, iw),
+    ...inputBlock(st, hv.input, iw, hv.match),
   ];
   // Around the scrolled lines: two borders, the heading and its gap, a gap and the action line.
   return { lines, view: Math.min(h - 6, lines.length) };
@@ -758,6 +836,17 @@ export function ago(ms: number): string {
   const h = Math.floor(m / 60);
   if (h < 48) return `${h}h ${m % 60}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A date that reads the same in every locale: `10 Sep 22:50`, with the year when it is not this one. */
+export function stamp(ms: number, nowMs: number): string {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "?";
+  const year = d.getFullYear() === new Date(nowMs).getFullYear() ? "" : ` ${d.getFullYear()}`;
+  const hm = [d.getHours(), d.getMinutes()].map((n) => String(n).padStart(2, "0")).join(":");
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}${year} ${hm}`;
 }
 
 function clock(ms: number): string {

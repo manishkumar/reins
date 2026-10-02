@@ -49,7 +49,9 @@ beyond the changelog entry is a call for whoever cuts the release.
 
 ## 5. Listing a looping session first changes the order of `reins watch`
 
-The agent list was newest first. A looping session now leads it. The cursor
+The agent list was newest first. A looping session now leads it, then
+sessions with a held action, and sessions quiet for over a day are counted in
+the footer and not listed. The cursor
 follows a row by id, so a selection does not jump to another session, but the
 row itself moves when a session starts or stops looping. If a stable order
 matters more than seeing the loop on a short terminal, the alternative is to

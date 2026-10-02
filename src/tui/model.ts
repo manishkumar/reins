@@ -8,6 +8,8 @@ import { listPending, proposalWorkdir, type PendingAction } from "../holds";
 import { supersededDeferIds } from "../holdActions";
 import { collectAttention, describeInput, type AttentionEvent } from "../attention";
 import { peekSteering } from "../steering";
+import { loadGuards } from "../guards";
+import { whyMatched, type MatchSpan } from "./why";
 
 /**
  * One frame's worth of state for `reins watch`, gathered read-only.
@@ -23,6 +25,8 @@ export const ACTIVE_WINDOW_MS = 30_000;
 /** Sparkline: this many buckets of this width, ending now. */
 export const SPARK_BUCKETS = 24;
 export const SPARK_BUCKET_MS = 30_000;
+/** A session quiet for longer than this is counted, not listed, unless something about it waits on you. */
+export const QUIET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export type CallKind = "ok" | "failed" | "denied" | "asked" | "held" | "approved" | "refused";
 
@@ -71,6 +75,10 @@ export interface HoldView {
   where: string;
   /** A deferred hold displaced by a newer one in the same session. */
   superseded: boolean;
+  /** Where in a Bash command the rule matched, when the rule still fires on it. */
+  match: MatchSpan | null;
+  /** The proposing session's last call, when capture knows it. */
+  lastActiveMs: number | null;
 }
 
 export interface WatchModel {
@@ -82,6 +90,8 @@ export interface WatchModel {
   events: AttentionEvent[];
   olderEvents: number;
   agents: AgentView[];
+  /** Sessions quiet for over QUIET_AFTER_MS, left out of `agents`. */
+  quietAgents: number;
   broadcast: string | null;
 }
 
@@ -97,20 +107,27 @@ const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)
 
 export function buildWatchModel(db: SqlDb | null, repo: string, threshold: number, o: BuildOpts = {}): WatchModel {
   const nowMs = o.nowMs ?? Date.now();
-  const recent = db ? readAgents(db, proposalWorkdir(repo), threshold, nowMs, o) : [];
-  // A looping agent is listed first: on a short terminal the list is cut, and
-  // the header's "1 looping" must have a row to point at. The rest stay newest
-  // first. The cockpit keeps its cursor by id, so a row that moves takes the
-  // selection with it.
-  const isLooping = (a: AgentView) => liveness(a, nowMs, threshold) === "looping";
-  const agents = [...recent.filter(isLooping), ...recent.filter((a) => !isLooping(a))];
-  const known = new Map<string, SessionFace>(agents.map((a) => [a.id, a]));
+  const pending = listPending(repo);
+  const all = db ? readAgents(db, proposalWorkdir(repo), threshold, nowMs, o) : [];
+  for (const a of all) a.holds = pending.filter((p) => p.session_id === a.id).length;
+  // What waits on you leads: a looping agent, then one with a held action,
+  // then the rest newest first. On a short terminal the list is cut, and the
+  // header's counts must have rows to point at. The cockpit keeps its cursor
+  // by id, so a row that moves takes the selection with it.
+  const rank = (a: AgentView) => (liveness(a, nowMs, threshold) === "looping" ? 0 : a.holds ? 1 : 2);
+  // A session nobody has touched for a day is history (`reins sessions` has
+  // it). It stays listed only while something about it is unanswered.
+  const quiet = (a: AgentView) =>
+    rank(a) === 2 && !a.steerQueued && a.id !== o.focusId && nowMs - (a.lastTsMs ?? nowMs) > QUIET_AFTER_MS;
+  const recent = all.filter((a) => !quiet(a));
+  const agents = [0, 1, 2].flatMap((r) => recent.filter((a) => rank(a) === r));
+  const known = new Map<string, SessionFace>(all.map((a) => [a.id, a]));
   const lookup = faceReader(db);
   const faceOf = (id: string): SessionFace => known.get(id) ?? lookup(id);
 
-  const pending = listPending(repo);
   const superseded = supersededDeferIds(pending);
   const root = proposalWorkdir(repo);
+  const rules = rulesById(repo);
   const holds: HoldView[] = pending.map((p) => ({
     action: p,
     sessionName: faceOf(p.session_id).name,
@@ -119,8 +136,9 @@ export function buildWatchModel(db: SqlDb | null, repo: string, threshold: numbe
     input: describeInput(p),
     where: whereLabel(root, p.cwd),
     superseded: superseded.has(p.id),
+    match: p.tool === "Bash" ? whyMatched(rules.get(p.rule_id), describeInput(p), p.cwd) : null,
+    lastActiveMs: all.find((a) => a.id === p.session_id)?.lastTsMs ?? null,
   }));
-  for (const a of agents) a.holds = pending.filter((p) => p.session_id === a.id).length;
 
   const att = collectAttention(repo, db, new Date(nowMs));
 
@@ -140,8 +158,17 @@ export function buildWatchModel(db: SqlDb | null, repo: string, threshold: numbe
     events: att.events,
     olderEvents: att.olderEvents,
     agents,
+    quietAgents: all.length - agents.length,
     broadcast,
   };
+}
+
+function rulesById(repo: string): Map<string, import("../guards").GuardRule> {
+  try {
+    return new Map(loadGuards(repo).rules.map((r) => [r.id, r]));
+  } catch {
+    return new Map(); // unreadable policy: holds are still listed, without the matched text
+  }
 }
 
 function readAgents(db: SqlDb, root: string, threshold: number, nowMs: number, o: BuildOpts): AgentView[] {

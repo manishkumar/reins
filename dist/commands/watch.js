@@ -107,6 +107,9 @@ function runCockpit(repo, threshold, intervalSec, quiet) {
         let toastAt = 0;
         let anchor = (0, render_1.selectedRow)(model, ui);
         let knownHolds = new Set(model.holds.map((h) => h.action.id));
+        // The action as it stood when its dialog opened. The model refreshes under
+        // an open dialog, so "what was reviewed" has to be kept from that moment.
+        let reviewing = null;
         let prevFrame = [];
         let timer = null;
         let closed = false;
@@ -239,16 +242,18 @@ function runCockpit(repo, threshold, intervalSec, quiet) {
                 toast(`select a held action (◆) under NEEDS YOU to ${kind} it`, "muted");
                 return;
             }
+            reviewing = (0, render_1.findHold)(model, row.id)?.action ?? null;
             ui.modal = kind === "approve" ? { kind, holdId: row.id, scroll: 0 } : { kind, holdId: row.id, text: "" };
         }
         function decide(kind, holdId, text = "") {
-            const reviewed = (0, render_1.findHold)(model, holdId);
+            const reviewed = reviewing?.id === holdId ? reviewing : null;
+            reviewing = null;
             ui.modal = null;
             if (!reviewed) {
                 toast(`${holdId} is no longer pending`, "muted");
                 return;
             }
-            const check = (0, holdActions_1.reloadForDecision)(holdId, reviewed.action);
+            const check = (0, holdActions_1.reloadForDecision)(holdId, reviewed);
             if (!check.ok) {
                 toast(check.reason === "gone"
                     ? `${holdId} was already resolved elsewhere — nothing changed`

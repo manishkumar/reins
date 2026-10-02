@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SPARK_BUCKET_MS = exports.SPARK_BUCKETS = exports.ACTIVE_WINDOW_MS = void 0;
+exports.QUIET_AFTER_MS = exports.SPARK_BUCKET_MS = exports.SPARK_BUCKETS = exports.ACTIVE_WINDOW_MS = void 0;
 exports.buildWatchModel = buildWatchModel;
 exports.liveness = liveness;
 const path = __importStar(require("node:path"));
@@ -45,6 +45,8 @@ const holds_1 = require("../holds");
 const holdActions_1 = require("../holdActions");
 const attention_1 = require("../attention");
 const steering_1 = require("../steering");
+const guards_1 = require("../guards");
+const why_1 = require("./why");
 /**
  * One frame's worth of state for `reins watch`, gathered read-only.
  *
@@ -58,22 +60,31 @@ exports.ACTIVE_WINDOW_MS = 30_000;
 /** Sparkline: this many buckets of this width, ending now. */
 exports.SPARK_BUCKETS = 24;
 exports.SPARK_BUCKET_MS = 30_000;
+/** A session quiet for longer than this is counted, not listed, unless something about it waits on you. */
+exports.QUIET_AFTER_MS = 24 * 60 * 60 * 1000;
 const TAGGED = /^(DENIED|ASKED|HELD|APPROVED|REFUSED): (.*?)(?: \[guard:([^\]]+)\])?(?: \[hold:[^\]]+\])?$/;
 function buildWatchModel(db, repo, threshold, o = {}) {
     const nowMs = o.nowMs ?? Date.now();
-    const recent = db ? readAgents(db, (0, holds_1.proposalWorkdir)(repo), threshold, nowMs, o) : [];
-    // A looping agent is listed first: on a short terminal the list is cut, and
-    // the header's "1 looping" must have a row to point at. The rest stay newest
-    // first. The cockpit keeps its cursor by id, so a row that moves takes the
-    // selection with it.
-    const isLooping = (a) => liveness(a, nowMs, threshold) === "looping";
-    const agents = [...recent.filter(isLooping), ...recent.filter((a) => !isLooping(a))];
-    const known = new Map(agents.map((a) => [a.id, a]));
+    const pending = (0, holds_1.listPending)(repo);
+    const all = db ? readAgents(db, (0, holds_1.proposalWorkdir)(repo), threshold, nowMs, o) : [];
+    for (const a of all)
+        a.holds = pending.filter((p) => p.session_id === a.id).length;
+    // What waits on you leads: a looping agent, then one with a held action,
+    // then the rest newest first. On a short terminal the list is cut, and the
+    // header's counts must have rows to point at. The cockpit keeps its cursor
+    // by id, so a row that moves takes the selection with it.
+    const rank = (a) => (liveness(a, nowMs, threshold) === "looping" ? 0 : a.holds ? 1 : 2);
+    // A session nobody has touched for a day is history (`reins sessions` has
+    // it). It stays listed only while something about it is unanswered.
+    const quiet = (a) => rank(a) === 2 && !a.steerQueued && a.id !== o.focusId && nowMs - (a.lastTsMs ?? nowMs) > exports.QUIET_AFTER_MS;
+    const recent = all.filter((a) => !quiet(a));
+    const agents = [0, 1, 2].flatMap((r) => recent.filter((a) => rank(a) === r));
+    const known = new Map(all.map((a) => [a.id, a]));
     const lookup = (0, sessionFace_1.faceReader)(db);
     const faceOf = (id) => known.get(id) ?? lookup(id);
-    const pending = (0, holds_1.listPending)(repo);
     const superseded = (0, holdActions_1.supersededDeferIds)(pending);
     const root = (0, holds_1.proposalWorkdir)(repo);
+    const rules = rulesById(repo);
     const holds = pending.map((p) => ({
         action: p,
         sessionName: faceOf(p.session_id).name,
@@ -82,9 +93,9 @@ function buildWatchModel(db, repo, threshold, o = {}) {
         input: (0, attention_1.describeInput)(p),
         where: whereLabel(root, p.cwd),
         superseded: superseded.has(p.id),
+        match: p.tool === "Bash" ? (0, why_1.whyMatched)(rules.get(p.rule_id), (0, attention_1.describeInput)(p), p.cwd) : null,
+        lastActiveMs: all.find((a) => a.id === p.session_id)?.lastTsMs ?? null,
     }));
-    for (const a of agents)
-        a.holds = pending.filter((p) => p.session_id === a.id).length;
     const att = (0, attention_1.collectAttention)(repo, db, new Date(nowMs));
     let broadcast = null;
     try {
@@ -102,8 +113,17 @@ function buildWatchModel(db, repo, threshold, o = {}) {
         events: att.events,
         olderEvents: att.olderEvents,
         agents,
+        quietAgents: all.length - agents.length,
         broadcast,
     };
+}
+function rulesById(repo) {
+    try {
+        return new Map((0, guards_1.loadGuards)(repo).rules.map((r) => [r.id, r]));
+    }
+    catch {
+        return new Map(); // unreadable policy: holds are still listed, without the matched text
+    }
 }
 function readAgents(db, root, threshold, nowMs, o) {
     const out = [];

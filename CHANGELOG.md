@@ -92,8 +92,33 @@ All notable changes to `reins` are documented here. Format loosely follows
   the refresh interval, the idle count and the active count, in that order,
   and keeps what needs you and the looping count. A long session title pushed
   the status and the claim check verdict off the agent row; the row now drops
+- **The cockpit shows why a hold parked.** The text a Bash rule matched is
+  highlighted in the proposed input, in the detail pane and the approve
+  dialog. When it sits below the third line of a long command, that line is
+  also shown above the input with its line number. The match comes from the
+  guard's own matcher (`firingSegment` in `src/guards.ts`, which
+  `checkGuards` now decides with), read against the rule as it stands now.
+
+### Changed
+
+- **The agent list leads with what waits on you.** Order is looping, then
+  sessions with a held action, then newest first. A session with no call for
+  over a day is counted in the footer and not listed, unless it is looping,
+  holds an action or has a steer queued.
+- **Agent rows.** The call count is labeled (`76 calls`) and is given up
+  before the title is cut. A session with no title, branch or prompt takes
+  two lines. A call that did not simply run says what happened to it
+  (`denied`, `held`, `failed`, `approved`, `refused`). The "result not
+  visible" claim verdict is no longer on the row; the detail pane has it.
+- **Dates in the cockpit** read `10 Sep 22:50` in every locale. A hold whose
+  session has been quiet for over a day says so.
+
   its sparkline and cuts the title first. A looping session could be hidden
   under "+2 more"; it is now listed first. File paths inside the project are
+- **Approving from the cockpit compared against the wrong snapshot.** The
+  check that an action is unchanged since it was reviewed read the reviewed
+  copy from the screen's model, which refreshes under an open dialog. It now
+  keeps the action as it stood when the dialog opened.
   shown from the project root. A hold row cuts the session title before the
   rule id and always keeps a column between them. The help dialog's key
   column no longer runs into its text, and the activity line stays inside the

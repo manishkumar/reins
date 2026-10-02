@@ -6,6 +6,7 @@ import { loadConfig } from "../config";
 import { resolveProjectDir } from "../paths";
 import { appendSteering, clearSteering } from "../steering";
 import { approveHold, denyHold, reloadForDecision } from "../holdActions";
+import type { PendingAction } from "../holds";
 import { buildWatchModel, type WatchModel } from "../tui/model";
 import { clean, detectColorMode, Style, type Tone } from "../tui/term";
 import {
@@ -91,6 +92,9 @@ function runCockpit(repo: string, threshold: number, intervalSec: number, quiet:
     let toastAt = 0;
     let anchor: Row | null = selectedRow(model, ui);
     let knownHolds = new Set(model.holds.map((h) => h.action.id));
+    // The action as it stood when its dialog opened. The model refreshes under
+    // an open dialog, so "what was reviewed" has to be kept from that moment.
+    let reviewing: PendingAction | null = null;
     let prevFrame: string[] = [];
     let timer: NodeJS.Timeout | null = null;
     let closed = false;
@@ -226,17 +230,19 @@ function runCockpit(repo: string, threshold: number, intervalSec: number, quiet:
         toast(`select a held action (◆) under NEEDS YOU to ${kind} it`, "muted");
         return;
       }
+      reviewing = findHold(model, row.id)?.action ?? null;
       ui.modal = kind === "approve" ? { kind, holdId: row.id, scroll: 0 } : { kind, holdId: row.id, text: "" };
     }
 
     function decide(kind: "approve" | "deny", holdId: string, text = ""): void {
-      const reviewed = findHold(model, holdId);
+      const reviewed = reviewing?.id === holdId ? reviewing : null;
+      reviewing = null;
       ui.modal = null;
       if (!reviewed) {
         toast(`${holdId} is no longer pending`, "muted");
         return;
       }
-      const check = reloadForDecision(holdId, reviewed.action);
+      const check = reloadForDecision(holdId, reviewed);
       if (!check.ok) {
         toast(
           check.reason === "gone"

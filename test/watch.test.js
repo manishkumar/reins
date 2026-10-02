@@ -224,8 +224,8 @@ test("renderScreen: denied and held calls carry their glyphs and rule", () => {
     { tool: "Bash", summary: "git push", kind: "held", ruleId: "push-hold", tsMs: NOW, streak: 1 },
   ];
   const out = screen(model({ agents: [agent({ trajectory: traj })] }), ui());
-  assert.match(out, /⊘ Bash\s+rm -rf build \[rm-rf\]/);
-  assert.match(out, /◆ Bash\s+git push \[push-hold\]/);
+  assert.match(out, /⊘ Bash\s+denied rm -rf build \[rm-rf\]/);
+  assert.match(out, /◆ Bash\s+held git push \[push-hold\]/);
 });
 
 test("renderScreen: hints follow the selection", () => {
